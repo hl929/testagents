@@ -1,86 +1,118 @@
-"""CLI 入口点"""
+"""CLI 入口点 - 自然语言输入 + 双模式调度"""
 
 import argparse
 import json
 import sys
 
+from langgraph.types import Command
+
+from test_agents.config import config
 from test_agents.graph.builder import build_graph
-from test_agents.graph.state import TestAgentState
 
 
-def run_test_agents(
-    module_name: str,
-    source_commit: str,
-    target_commit: str,
-    commit_msg: str = "",
-    test_cases: str = "",
-    business_knowledge: str = "",
-) -> dict:
+_SINGLE_AGENT_KEYWORDS = {
+    "code_analyzer": ["分析代码", "代码变更", "code change", "git diff", "代码分析"],
+    "case_reviewer": ["评审用例", "测试用例评审", "case review", "用例评审", "评审测试用例"],
+}
+
+
+def is_simple_request(user_request: str) -> str | None:
+    """Check if request maps to a single agent. Returns agent name or None."""
+    matches = []
+    for agent, keywords in _SINGLE_AGENT_KEYWORDS.items():
+        for kw in keywords:
+            if kw.lower() in user_request.lower():
+                matches.append(agent)
+                break
+
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _build_initial_state(user_request: str) -> dict:
+    """Build initial SupervisorState for graph invocation"""
+    return {
+        "user_request": user_request,
+        "targets": [],
+        "test_cases": [],
+        "business_knowledge": "",
+        "plan": None,
+        "current_step_index": 0,
+        "step_results": [],
+        "needs_replan": False,
+        "reflection_feedback": None,
+        "max_plan_iterations": config.MAX_PLAN_ITERATIONS,
+        "plan_iterations": 0,
+        "confirm_retry_count": 0,
+        "max_confirm_retries": config.MAX_CONFIRM_RETRIES,
+        "code_change_report": "",
+        "review_results": [],
+        "final_answer": None,
+        "messages": [],
+    }
+
+
+def run_test_agents(user_request: str) -> dict:
     """运行测试智能体群"""
-    # 解析测试用例
-    parsed_cases = []
-    if test_cases:
-        try:
-            parsed = json.loads(test_cases)
-            if isinstance(parsed, list):
-                parsed_cases = parsed
-            elif isinstance(parsed, dict):
-                parsed_cases = [parsed]
-        except json.JSONDecodeError:
-            print("警告: 测试用例 JSON 解析失败，将使用空列表", file=sys.stderr)
-
-    # 构建初始状态
-    state = TestAgentState(
-        module_name=module_name,
-        source_commit=source_commit,
-        target_commit=target_commit,
-        commit_msg=commit_msg,
-        test_cases=parsed_cases,
-        business_knowledge=business_knowledge,
-    )
-
-    # 构建图并运行
     app = build_graph()
+    thread_config = {"configurable": {"thread_id": "test-agents-session"}}
+    initial_state = _build_initial_state(user_request)
 
-    config = {"configurable": {"thread_id": f"{module_name}-{source_commit}"}}
-    result = app.invoke(state.model_dump(), config)
+    result = app.invoke(initial_state, thread_config)
 
-    return result
+    # Handle interrupts (confirm_plan)
+    while True:
+        state = app.get_state(thread_config)
+        if not state.next:
+            break
+        # Graph is paused at confirm_plan
+        plan = state.values.get("plan", {})
+        _display_plan(plan)
+        confirmed = input("\n确认计划？(y/n): ").lower().strip()
+        if confirmed == "y":
+            app.invoke(Command(resume={"confirmed": True}), thread_config)
+        else:
+            feedback = input("请输入修改建议: ")
+            app.invoke(Command(resume={"confirmed": False, "feedback": feedback}), thread_config)
+
+    # Get final state
+    final_state = app.get_state(thread_config)
+    return final_state.values
+
+
+def _display_plan(plan: dict):
+    """Display execution plan for user confirmation"""
+    if not plan:
+        print("（无计划）")
+        return
+    print(f"\n执行计划: {plan.get('intent', 'N/A')}")
+    print("-" * 40)
+    for step in plan.get("steps", []):
+        print(f"  步骤 {step.get('step_id')}: [{step.get('agent')}] {step.get('description')}")
 
 
 def main():
     """CLI 主函数"""
-    parser = argparse.ArgumentParser(description="测试智能体群")
-    parser.add_argument("--module", required=True, help="模块名称")
-    parser.add_argument("--source", required=True, help="源 commit SHA")
-    parser.add_argument("--target", required=True, help="目标 commit SHA")
-    parser.add_argument("--msg", default="", help="commit message")
-    parser.add_argument("--cases", default="", help="测试用例 JSON 字符串")
-    parser.add_argument("--knowledge", default="", help="业务知识")
-    parser.add_argument("--output", default="json", choices=["json", "markdown"], help="输出格式")
-
+    parser = argparse.ArgumentParser(description="测试智能体群 v3")
+    parser.add_argument("request", nargs="?", help="自然语言需求描述")
+    parser.add_argument("--output", default="text", choices=["json", "text"], help="输出格式")
     args = parser.parse_args()
 
-    result = run_test_agents(
-        module_name=args.module,
-        source_commit=args.source,
-        target_commit=args.target,
-        commit_msg=args.msg,
-        test_cases=args.cases,
-        business_knowledge=args.knowledge,
-    )
-
-    # 输出结果
-    if args.output == "json":
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.request:
+        user_request = args.request
     else:
-        print("# 测试智能体群执行结果\n")
-        print(f"## 代码变更报告\n{result.get('code_change_report', 'N/A')}\n")
-        print(f"## 用例评审结果")
-        for r in result.get("review_results", []):
-            print(f"\n### {r.get('case_id', 'N/A')} - {r.get('title', '')}")
-            print(f"- 结论: {r.get('verdict', 'N/A')}")
-            print(f"- 得分: {r.get('score', 'N/A')}")
+        user_request = input("请输入需求: ")
+
+    result = run_test_agents(user_request)
+
+    if args.output == "json":
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    else:
+        if result.get("final_answer"):
+            print(f"\n{result['final_answer']}")
+        else:
+            print("\n（未生成最终结果）")
 
 
 if __name__ == "__main__":
