@@ -4,13 +4,16 @@ import json
 from test_agents.tools.claude_cli import ClaudeCliTool
 
 
-def case_reviewer_node(state: dict) -> dict:
+def case_reviewer_node(state) -> dict:
     """用例评审节点
 
     1. 读取 code_change_report + test_cases + business_knowledge
     2. 调用 ClaudeCliTool 进行评审
     3. 输出评审结果
     """
+    if hasattr(state, "model_dump"):
+        state = state.model_dump()
+
     code_change_report = state.get("code_change_report", "")
     test_cases = state.get("test_cases", [])
     business_knowledge = state.get("business_knowledge", "")

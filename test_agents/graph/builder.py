@@ -26,7 +26,7 @@ def build_graph():
     # 条件边：Supervisor 决策路由
     graph.add_conditional_edges(
         "supervisor",
-        lambda state: state.get("next_step", "end"),
+        lambda state: getattr(state, "next_step", state.model_dump().get("next_step", "end") if hasattr(state, "model_dump") else "end"),
         {
             "analyze": "code_analyzer",
             "review": "case_reviewer",

@@ -4,13 +4,16 @@ from test_agents.tools.git_diff import GitDiffTool
 from test_agents.tools.claude_cli import ClaudeCliTool
 
 
-def code_analyzer_node(state: dict) -> dict:
+def code_analyzer_node(state) -> dict:
     """代码分析节点
 
     1. 调用 GitDiffTool 提取变更
     2. 将变更内容通过 ClaudeCliTool 传递给 Claude CLI 分析
     3. 返回结构化变更报告
     """
+    if hasattr(state, "model_dump"):
+        state = state.model_dump()
+
     module_name = state.get("module_name", "")
     source_commit = state.get("source_commit", "")
     target_commit = state.get("target_commit", "")

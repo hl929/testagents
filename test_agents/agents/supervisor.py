@@ -3,7 +3,7 @@
 from typing import Literal
 
 
-def route_decision(state: dict) -> Literal["analyze", "review", "end"]:
+def route_decision(state) -> Literal["analyze", "review", "end"]:
     """根据当前 state 决定下一步路由
 
     决策逻辑:
@@ -11,6 +11,9 @@ def route_decision(state: dict) -> Literal["analyze", "review", "end"]:
     2. 如果 test_cases 非空且 review_results 为空 -> 调用用例评审
     3. 其他情况 -> 结束
     """
+    if hasattr(state, "model_dump"):
+        state = state.model_dump()
+
     code_report = state.get("code_change_report", "")
     test_cases = state.get("test_cases", [])
     review_results = state.get("review_results", [])
@@ -32,7 +35,7 @@ def route_decision(state: dict) -> Literal["analyze", "review", "end"]:
     return "end"
 
 
-def supervisor_node(state: dict) -> dict:
+def supervisor_node(state) -> dict:
     """Supervisor 节点 - 更新 next_step"""
     next_step = route_decision(state)
     return {"next_step": next_step}
