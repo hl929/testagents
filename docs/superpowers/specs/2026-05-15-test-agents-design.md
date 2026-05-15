@@ -44,9 +44,10 @@ test_agents/
 │   └── builder.py               # 图构建与编译
 ├── skills/                      # Claude CLI Skills
 │   ├── readme.md                # Skill 安装与使用说明
-│   └── test_agents_skill/       # 主 Skill
-│       ├── SKILL.md             # Skill 元数据
-│       └── main.py              # Skill 入口
+│   ├── code_analysis_skill/     # 代码分析 Skill
+│   │   └── SKILL.md             # Skill 元数据：代码变更分析指令
+│   └── case_review_skill/       # 用例评审 Skill
+│       └── SKILL.md             # Skill 元数据：测试用例评审指令
 ├── prompts/                     # 提示词模板
 │   ├── supervisor.md
 │   ├── code_analyzer.md
@@ -283,41 +284,75 @@ END → 输出 review_results
 
 ### 7.1 设计目的
 
-将 LangGraph 图编排封装为 Claude CLI Skill，用户安装后可直接通过 `claude /test_agents` 触发整个测试智能体群。
+`skills/` 目录存放 **Claude CLI Skill**，供本项目的智能体在运行时通过 `ClaudeCliTool` 间接调用。
+
+**调用链路**：
+
+```
+本项目的 LangGraph 智能体 (CodeAnalyzer / CaseReviewer)
+    ↓ 调用 ClaudeCliTool
+Claude CLI (claude -p)
+    ↓ 加载并使用 Skill
+Skill 完成特定子任务（如代码变更分析、用例评审）
+    ↓ 返回结果
+Claude CLI 返回输出
+    ↓
+智能体接收结果，写入 state
+```
+
+**部署方式**：将 `skills/` 下的 skill 目录复制到 Claude 用户级 skill 目录（如 `~/.claude/skills/`），Claude CLI 启动时自动加载。
 
 ### 7.2 Skill 结构
 
 ```
 skills/
 ├── readme.md                        # Skill 安装与使用说明
-└── test_agents_skill/
-    ├── SKILL.md                     # Skill 元数据（名称、描述、触发词、参数）
-    └── main.py                      # Skill 入口脚本
+├── code_analysis_skill/             # 代码分析 Skill
+│   └── SKILL.md                     # Skill 元数据：代码变更分析指令
+└── case_review_skill/               # 用例评审 Skill
+    └── SKILL.md                     # Skill 元数据：测试用例评审指令
 ```
 
-### 7.3 Skill 入口逻辑（main.py）
+每个 Skill 是一个独立目录，仅包含 `SKILL.md`。Claude CLI 通过 `SKILL.md` 中的元数据识别和加载 skill。
+
+### 7.3 Skill 内容示例
+
+**`code_analysis_skill/SKILL.md`**：
+- 定义代码变更分析的指令模板
+- 规定输出格式（变更概述、影响文件、关键逻辑变更、影响范围评估）
+- 定义输入参数占位符（`{{module_name}}`、`{{diff_content}}`、`{{commit_msg}}`）
+
+**`case_review_skill/SKILL.md`**：
+- 定义测试用例评审的指令模板
+- 规定输出格式（verdict、score、issues、suggestions、coverage_assessment）
+- 定义输入参数占位符（`{{code_change_report}}`、`{{test_cases}}`、`{{business_knowledge}}`）
+
+### 7.4 调用方式
+
+本项目的智能体通过 `ClaudeCliTool` 调用 Claude CLI，prompt 中嵌入 skill 触发指令：
 
 ```python
-import sys
-from graph.builder import build_graph
+# CodeAnalyzer 中
+prompt = f"""
+分析以下代码变更：
+模块：{module_name}
+Commit：{source_commit}..{target_commit}
+变更内容：\n{diff_content}
 
-# 从 Claude CLI 传入的参数解析模块名、commit、用例等
-# 组装为 TestAgentState 初始值
-# 调用 graph.invoke(state)
-# 输出 review_results
-```
+请使用 code_analysis_skill 进行结构化分析。
+"""
+claude_cli_tool.run({"prompt": prompt})
 
-### 7.4 使用方式
+# CaseReviewer 中
+prompt = f"""
+基于以下代码变更报告评审测试用例：
+变更报告：\n{code_change_report}
+用例列表：\n{test_cases}
+业务知识：\n{business_knowledge}
 
-安装 Skill 后：
-
-```bash
-claude /test_agents \
-    --module order \
-    --source a1b2c3d \
-    --target e4f5g6h \
-    --cases cases.json \
-    --knowledge knowledge.yaml
+请使用 case_review_skill 进行结构化评审。
+"""
+claude_cli_tool.run({"prompt": prompt})
 ```
 
 ## 8. 错误处理
