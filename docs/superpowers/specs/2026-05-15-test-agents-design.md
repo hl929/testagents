@@ -1,27 +1,65 @@
 ---
-title: 测试智能体群（Test Agents）设计文档
-description: 基于 LangGraph Supervisor 模式的多智能体测试系统，包含测试经理、代码分析智能体、用例评审智能体，支持 Claude CLI Skill 调用
+title: 测试智能体群（Test Agents）设计文档 — Plan-and-Solve + Reflection 范式
+description: 基于 LangGraph 的分层多智能体测试系统，监督者采用 Plan-and-Solve + 反思，执行 Agent 采用 ReAct + 反思，Worker 子图作为图节点注册
 date: 2026-05-15
 ---
 
-# 测试智能体群（Test Agents）设计文档
+# 测试智能体群（Test Agents）设计文档 — Plan-and-Solve + Reflection 范式
 
 ## 1. 项目概述
 
-基于 LangGraph Supervisor 模式构建的多智能体测试系统。核心目标：接收代码变更信息（模块名、commit 范围）和测试用例，自动分析代码变更、评审测试用例质量，输出评审报告。
+基于 LangGraph 的分层多智能体测试系统。用户以自然语言描述需求，监督者自动规划执行步骤，按序调度 Worker Agent 完成任务，全步骤完成后反思评估，经验持久记录。
 
-系统以 **Claude CLI Skill** 的形式交付，安装后可通过 `claude /test_agents` 直接调用。
+**架构范式：**
+- **监督者**：Plan-and-Solve + 反思（全步骤完成后 LLM 评估，不完整则 replan）
+- **执行者**：ReAct + 反思（LLM 评估结果质量，不通过则重试，受 max_reflections 控制）
+- **Worker 子图**作为主图节点注册，LangGraph 原生支持子图追踪
+- 支持监督者调度和直接调用 Worker 两种模式
 
 ## 2. 架构设计
 
 ### 2.1 模式选型
 
-采用 **LangGraph Supervisor（监管者模式）**：
+采用 **Plan-and-Solve + Reflection** 分层架构：
 
-- 一个中心 **测试经理（Supervisor）** 智能体负责任务调度
-- 两个 Worker 智能体：**代码分析** 和 **用例评审**
-- Supervisor 根据当前 `state` 决定下一步调用哪个 Worker
-- Worker 执行完成后返回 Supervisor，形成循环直到任务完成
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          Supervisor 主图                                  │
+│                                                                           │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌───────────┐            │
+│  │ planner  │──→│ dispatch │──→│ reflect  │──→│ synthesize│            │
+│  │ (分解任务) │   │ (路由分派) │   │ (整体反思) │   │ (汇总结果) │            │
+│  └──────────┘   └────┬─────┘   └─────┬────┘   └───────────┘            │
+│       ↑               │               │           │                      │
+│       │     ┌─────────┴─────────┐    │ replan    │                      │
+│       │     ▼                   ▼    └───────────┘                      │
+│       │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐         │
+│       │  │code_analyzer │  │case_reviewer │  │save_experience│         │
+│       │  │ (ReAct子图)   │  │ (ReAct子图)   │  │ (经验记录)     │         │
+│       │  └──────┬───────┘  └──────┬───────┘  └───────────────┘         │
+│       │         │                 │                                     │
+│  ─────┼─────────┼─────────────────┼─────────────────────────────────    │
+│       │    Tool 层                 │                                     │
+│       │         ▼                 ▼                                     │
+│       │  ┌──────────────┐  ┌──────────────┐                            │
+│       │  │ ClaudeCliTool│  │ ClaudeCliTool│                            │
+│       │  └──────────────┘  │ TestCasePar- │                            │
+│       │                    │ serTool      │                            │
+│       │                    │ BusinessKn-  │                            │
+│       │                    │ owledgeTool  │                            │
+│       │                    └──────────────┘                            │
+│       └────────────────────────────────────────────────────────────────│
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**调用层次：** `Planner → Dispatch → Worker(ReAct子图) → Tool`
+
+**双重调用模式：**
+
+| 调用模式 | 实现方式 | 适用场景 |
+|---|---|---|
+| 监督者→Worker | Worker 子图作为主图节点，dispatch 路由 | 复杂任务需要拆解时 |
+| 直接调用 Worker | main.py 中直接 `worker_app.invoke()` | 简单任务，用户明确指定某 Agent 时 |
 
 ### 2.2 目录结构
 
@@ -29,384 +67,717 @@ date: 2026-05-15
 test_agents/
 ├── agents/                      # 智能体定义
 │   ├── __init__.py
-│   ├── supervisor.py            # 测试经理 Supervisor
-│   ├── code_analyzer.py         # 代码分析智能体
-│   └── case_reviewer.py         # 用例评审智能体
+│   ├── supervisor.py            # 监督者：planner + dispatch + reflect + synthesize + save_experience
+│   ├── worker_base.py           # Worker 子图构建工厂（ReAct + 反思）
+│   ├── code_analyzer.py         # 代码分析智能体（Worker 子图定义 + 工具绑定）
+│   └── case_reviewer.py         # 用例评审智能体（Worker 子图定义 + 工具绑定）
 ├── tools/                       # 公共工具层
 │   ├── __init__.py
-│   ├── claude_cli.py            # 调用 claude -p 的工具
-│   ├── git_diff.py              # Git 变更提取工具
-│   ├── test_case_parser.py      # 测试用例解析工具
-│   └── business_knowledge.py    # 业务知识查询工具
+│   ├── claude_cli.py
+│   ├── test_case_parser.py
+│   └── business_knowledge.py
 ├── graph/                       # 图编排
 │   ├── __init__.py
-│   ├── state.py                 # GraphState 定义
-│   └── builder.py               # 图构建与编译
-├── skills/                      # Claude CLI Skills
-│   ├── readme.md                # Skill 安装与使用说明
-│   ├── code_analysis_skill/     # 代码分析 Skill
-│   │   └── SKILL.md             # Skill 元数据：代码变更分析指令
-│   └── case_review_skill/       # 用例评审 Skill
-│       └── SKILL.md             # Skill 元数据：测试用例评审指令
+│   ├── state.py                 # SupervisorState + WorkerState（重新设计）
+│   └── builder.py               # 主图构建与编译（重构）
+├── skills/                      # Claude CLI Skills（不变）
+│   ├── code_analysis_skill/
+│   └── case_review_skill/
 ├── prompts/                     # 提示词模板
-│   ├── supervisor.md
+│   ├── supervisor.md            # 监督者各阶段提示词（planner / reflect / synthesize）
+│   ├── worker_reflect.md        # Worker 反思提示词（新增）
 │   ├── code_analyzer.md
 │   └── case_reviewer.md
-├── config.py                    # 配置（模型、API Key、路径等）
-└── readme.md                    # 项目说明
+├── config.py                    # 配置
+├── main.py                      # 入口（改为接收 user_request + 直接调用路由）
+├── data/                            # 运行时数据
+│   └── reflection_experience.md      # 经验记录文档（运行时生成）
 ```
 
-## 3. 状态设计（GraphState）
+## 3. 状态设计
+
+### 3.1 主图状态（SupervisorState）
 
 ```python
-class TestAgentState(TypedDict):
+from typing import Annotated, TypedDict, Literal, Optional, List
+from langgraph.graph.message import AnyMessage, add_messages
+import operator
+
+
+class PlanStep(BaseModel):
+    step_id: int                          # 步骤序号，从 1 开始
+    agent: str                            # code_analyzer / case_reviewer
+    description: str                      # 步骤描述
+    input_mapping: dict[str, str]         # agent入参 → state字段引用或常量
+
+
+class ExecutionPlan(BaseModel):
+    intent: str                           # 用户意图摘要
+    steps: list[PlanStep]                 # 有序步骤列表
+    confirmed: bool = False               # 用户是否确认
+
+
+class StepResult(BaseModel):
+    step_id: int
+    agent: str
+    status: str                           # success / failed
+    output_key: str                       # 结果写入主图 state 的哪个字段
+    error: str = ""
+
+
+class AnalysisTarget(BaseModel):
+    module_name: str                      # 模块名称
+    source_commit: str                    # 源 commit SHA
+    target_commit: str                    # 目标 commit SHA
+    commit_msg: str = ""                  # commit message
+
+
+class SupervisorState(TypedDict):
     # === 用户输入 ===
-    module_name: str
-    source_commit: str
-    target_commit: str
-    commit_msg: str
+    user_request: str                     # 自然语言需求（唯一输入）
+
+    # === Planner 提取的参数 ===
+    targets: list[AnalysisTarget]         # 分析目标列表（支持多模块）
     test_cases: list[dict]
     business_knowledge: str
 
-    # === 中间产物 ===
-    code_change_report: str        # 代码分析结果
-    review_results: list[dict]     # 用例评审结果
+    # === Plan-and-Solve ===
+    plan: Optional[ExecutionPlan]         # LLM 生成的计划（JSON 序列化存储）
+    current_step_index: int               # 当前执行步骤索引（0-based）
+    step_results: Annotated[list, operator.add]  # reducer 聚合各步骤结果
 
-    # === 控制流 ===
-    next_step: str                 # Supervisor 决策
-    messages: Annotated[list, add_messages]
+    # === 反思相关 ===
+    needs_replan: bool                    # 是否需要重新规划
+    reflection_feedback: Optional[str]    # 反思反馈内容
+    max_plan_iterations: int              # 防死循环，默认 1（不重新规划）
+    plan_iterations: int                  # 当前已规划次数
+
+    # === 计划确认相关 ===
+    confirm_retry_count: int              # 确认重试次数，默认 0
+    max_confirm_retries: int              # 最大确认重试次数，默认 3
+
+    # === Agent 产出（步骤间数据传递）===
+    code_change_report: str               # 多模块时自动拼接合并
+    review_results: list[dict]
+
+    # === 最终输出 ===
+    final_answer: Optional[str]
+
+    # === 消息历史 ===
+    messages: Annotated[list[AnyMessage], add_messages]
 ```
 
-### 字段说明
+### 3.2 Worker 子图状态（WorkerState）
 
-| 字段 | 类型 | 说明 |
+```python
+class WorkerState(TypedDict):
+    # === 任务输入（dispatch 传入）===
+    task: str                             # 当前步骤的子任务描述
+    messages: Annotated[list[AnyMessage], add_messages]
+
+    # === 反思相关 ===
+    error: str                            # "yes" / "no"
+    reflection_count: int
+    max_reflections: int                  # 默认 0（不重试）
+
+    # === 输出 ===
+    result: str                           # 执行结果
+    output_key: str                       # 结果写入主图 state 的哪个字段
+```
+
+### 3.3 主图与子图的状态映射
+
+dispatch 节点负责双向映射：
+
+**主图 → 子图：**
+```python
+worker_input = {
+    "task": plan_step.description,
+    "messages": [construct_agent_message(plan_step, state)],
+    "error": "no",
+    "reflection_count": 0,
+    "max_reflections": 0,  # 默认不重试
+    "output_key": agent_output_map[plan_step.agent],
+    "result": "",
+}
+```
+
+**子图 → 主图：**
+子图执行完后，dispatch 从 WorkerState.result 取结果，写入主图 `state[output_key]`。
+
+### 3.4 多模块聚合规则
+
+当有多个 code_analyzer 步骤时，每个步骤产出一份 `code_change_report`。dispatch 节点负责聚合：
+- 多份报告自动拼接，用 `## 模块: {module_name}` 标题分隔
+- 后续 case_reviewer 步骤引用 `${code_change_report}` 时拿到的是合并后的完整报告
+
+### 3.5 input_mapping 规则
+
+| 形式 | 示例 | 含义 |
 |---|---|---|
-| `module_name` | `str` | 待分析的模块名称 |
-| `source_commit` | `str` | 源 commit ID |
-| `target_commit` | `str` | 目标 commit ID |
-| `commit_msg` | `str` | commit message（辅助理解变更意图） |
-| `test_cases` | `list[dict]` | 待评审的测试用例，支持单条或批量 |
-| `business_knowledge` | `str` | 可选的业务背景知识 |
-| `code_change_report` | `str` | 代码分析智能体输出的变更报告 |
-| `review_results` | `list[dict]` | 用例评审智能体输出的评审结果 |
-| `next_step` | `str` | Supervisor 路由决策：`analyze` / `review` / `end` |
-| `messages` | `list` | LangGraph MessagesState 的 messages 字段，累积对话历史 |
+| 字符串常量 | `"payment"` | 直接传给 agent |
+| State 引用 | `"${code_change_report}"` | 从主图 state 中取对应字段的值 |
 
 ## 4. 节点设计
 
-### 4.1 Supervisor 节点（测试经理）
+### 4.1 Planner 节点
 
-**职责**：
-- 读取当前 `state`，判断已完成的步骤和待执行的任务
-- 输出 `next_step` 字段，驱动条件边路由
+**职责：**
+1. 解析 `user_request`，理解用户意图
+2. 提取参数（targets 列表、test_cases、business_knowledge 等）
+3. 生成 `ExecutionPlan`，包含有序步骤列表
 
-**决策逻辑**：
+**输出：** 更新 state 的 `plan`、`targets`、`test_cases`、`business_knowledge`
 
+**Prompt 设计要点：**
+- 告知 LLM 可用的 agent 列表及其能力、入参需求：
+
+| Agent | 能力 | 必需入参 | 产出字段 |
+|---|---|---|---|
+| `code_analyzer` | 分析代码变更 | module_name, source_commit, target_commit | code_change_report |
+| `case_reviewer` | 评审测试用例 | code_change_report, test_cases, business_knowledge | review_results |
+
+- 要求 LLM 输出严格 JSON 格式的 ExecutionPlan
+- LLM 根据用户意图选择最少步骤组合
+- 多模块时为每个模块生成一个 code_analyzer 步骤
+
+**示例 1：** 用户说"分析 payment 模块从 abc1234 到 def5678 的代码变更并评审测试用例"
+
+Planner 提取 targets：
+```json
+"targets": [
+  {"module_name": "payment", "source_commit": "abc1234", "target_commit": "def5678", "commit_msg": ""}
+]
 ```
-if code_change_report 为空:
-    next_step = "analyze"
-elif test_cases 非空 且 review_results 为空:
-    next_step = "review"
-else:
-    next_step = "end"
-```
 
-**加载工具**：无（纯 LLM 决策节点）
-
-**提示词**：`prompts/supervisor.md`
-
-### 4.2 代码分析智能体（CodeAnalyzer）
-
-**职责**：
-- 接收 `module_name`、`source_commit`、`target_commit`
-- 调用 `GitDiffTool` 提取代码变更
-- 将变更内容通过 `ClaudeCliTool`（`claude -p`）传递给 Claude CLI 进行分析
-- 生成结构化变更报告，写入 `code_change_report`
-
-**加载工具**：
-- `GitDiffTool`：执行 `git diff <src>..<tgt> -- <module>/`
-- `ClaudeCliTool`：封装 `claude -p <analysis_prompt>` 调用
-
-**提示词**：`prompts/code_analyzer.md`
-
-**输出格式**：
-
-```python
+生成的 plan：
+```json
 {
-    "code_change_report": """
-    ## 变更概述
-    ...
-    ## 新增/修改/删除的文件
-    ...
-    ## 关键逻辑变更
-    ...
-    ## 影响范围评估
-    ...
-    """
+  "intent": "分析代码变更并评审测试用例",
+  "steps": [
+    {
+      "step_id": 1,
+      "agent": "code_analyzer",
+      "description": "分析 payment 模块 abc1234→def5678 的代码变更",
+      "input_mapping": {
+        "module_name": "payment",
+        "source_commit": "abc1234",
+        "target_commit": "def5678"
+      }
+    },
+    {
+      "step_id": 2,
+      "agent": "case_reviewer",
+      "description": "基于变更报告评审测试用例",
+      "input_mapping": {
+        "code_change_report": "${code_change_report}",
+        "test_cases": "${test_cases}",
+        "business_knowledge": "${business_knowledge}"
+      }
+    }
+  ],
+  "confirmed": false
 }
 ```
 
-### 4.3 用例评审智能体（CaseReviewer）
+**示例 2：** 用户说"分析 payment 和 order 模块的代码变更"
 
-**职责**：
-- 读取 `code_change_report` + `test_cases` + `business_knowledge`
-- 调用 `TestCaseParserTool` 将输入统一为结构化用例列表
-- 调用 `ClaudeCliTool`（`claude -p`）对用例进行评审
-- 支持单条评审和批量评审两种模式
-- 输出评审结果到 `review_results`
+Planner 提取 targets：
+```json
+"targets": [
+  {"module_name": "payment", "source_commit": "abc1234", "target_commit": "def5678", "commit_msg": ""},
+  {"module_name": "order", "source_commit": "abc1234", "target_commit": "def5678", "commit_msg": ""}
+]
+```
 
-**加载工具**：
-- `ClaudeCliTool`：封装 `claude -p <review_prompt>` 调用
-- `TestCaseParserTool`：解析单条/批量用例输入，统一为 `list[dict]`
-- `BusinessKnowledgeTool`：从本地知识库检索相关业务知识（可选）
-
-**提示词**：`prompts/case_reviewer.md`
-
-**输出格式**：
-
-```python
+生成的 plan：
+```json
 {
-    "review_results": [
-        {
-            "case_id": "TC001",
-            "title": "...",
-            "verdict": "pass / fail / needs_improvement",
-            "score": 85,
-            "issues": ["缺少边界值验证", "步骤描述不清晰"],
-            "suggestions": ["补充负数输入场景", "明确前置条件"],
-            "coverage_assessment": "覆盖了主要路径，缺少异常分支"
-        }
-    ]
+  "intent": "分析 payment 和 order 模块的代码变更",
+  "steps": [
+    {
+      "step_id": 1,
+      "agent": "code_analyzer",
+      "description": "分析 payment 模块 abc1234→def5678 的代码变更",
+      "input_mapping": {
+        "module_name": "payment",
+        "source_commit": "abc1234",
+        "target_commit": "def5678"
+      }
+    },
+    {
+      "step_id": 2,
+      "agent": "code_analyzer",
+      "description": "分析 order 模块 abc1234→def5678 的代码变更",
+      "input_mapping": {
+        "module_name": "order",
+        "source_commit": "abc1234",
+        "target_commit": "def5678"
+      }
+    }
+  ],
+  "confirmed": false
 }
 ```
+
+**提示词：** `prompts/planner.md`
+
+### 4.2 ConfirmPlan 节点
+
+**职责：** 暂停 graph 执行，展示计划给用户确认
+
+**逻辑：**
+- 展示 `plan.intent` 和每个步骤的 `description`
+- 用户确认 → `plan.confirmed = True`，继续执行
+- 用户拒绝 → 用户提供反馈建议，回到 planner 重新规划，再次提交确认
+- 最多重试 3 次（`max_confirm_retries`），仍未确认则取消任务，设置 `error` 并终止
+
+**状态字段：**
+```python
+confirm_retry_count: int        # 当前确认重试次数，默认 0
+max_confirm_retries: int        # 最大确认重试次数，默认 3
+```
+
+**流程：**
+```
+ConfirmPlan
+    ├─ 用户确认 → plan.confirmed = True → dispatch
+    └─ 用户拒绝 → confirm_retry_count += 1
+        ├─ 未超限 → 用户反馈写回 state → planner（重新规划）→ ConfirmPlan（再次确认）
+        └─ 超限 → error = "用户多次拒绝计划，任务取消" → END
+```
+
+**实现方式：** 使用 LangGraph 的 `interrupt` 机制实现 human-in-the-loop，在 `main.py` 中捕获中断、展示计划、获取用户确认或拒绝反馈后 `Command(resume=...)` 继续
+
+### 4.3 Dispatch 节点
+
+**职责：** 按 `plan.steps[current_step_index]` 路由到对应 Worker 子图
+
+**逻辑：**
+```
+1. plan 未确认 → 返回等待
+2. current_step_index >= len(plan.steps) → 所有步骤完成 → 路由到 reflect
+3. 读取 plan.steps[current_step_index]
+4. 构建 WorkerState 输入（主图 → 子图映射）
+5. 路由到对应 Worker 子图节点
+6. Worker 执行完毕 → current_step_index += 1 → 回到步骤2
+```
+
+**路由映射：**
+
+| plan.steps[i].agent | Graph 节点 |
+|---|---|
+| `code_analyzer` | `code_analyzer` |
+| `case_reviewer` | `case_reviewer` |
+
+**提示词：** `prompts/dispatch.md`
+
+### 4.4 Reflect 节点（监督者反思）
+
+**职责：** 全部步骤执行完后，LLM 评估整体结果是否完整正确
+
+**触发条件：** `current_step_index >= len(plan.steps)`
+
+**逻辑：**
+```
+1. LLM 评估：plan 的所有 step_results 是否完整正确地解决了 user_request
+2. 评估结果：
+   - COMPLETE → needs_replan = False → 进入 synthesize
+   - REPLAN → needs_replan = True → 回到 planner（受 max_plan_iterations 限制）
+3. 超过 max_plan_iterations → 强制进入 synthesize
+4. 无论结果如何，记录规划与执行经验
+```
+
+**提示词：** `prompts/supervisor_reflect.md`
+
+### 4.5 SaveExperience 节点（经验记录）
+
+**职责：** 将规划与执行经验写入持久化文档
+
+**逻辑：**
+```
+1. 读取本次 plan + step_results + reflection_feedback
+2. LLM 生成经验摘要（意图→规划→结果→反思）
+3. 写入 data/reflection_experience.md
+4. 去重：LLM 判断新经验是否与已有经验语义重复，重复则不更新
+```
+
+**经验文档格式：**
+```markdown
+# 任务规划反思经验
+
+## 经验 1
+- **意图**: 分析代码变更并评审测试用例
+- **规划**: [code_analyzer → case_reviewer]
+- **结果**: 完成，LLM 评估 COMPLETE
+- **反思**: 无
+
+## 经验 2
+- **意图**: 分析 payment 模块代码变更
+- **规划**: [code_analyzer]
+- **结果**: code_change_report 为空，因为 commit SHA 无效
+- **反思**: 需在规划阶段验证参数有效性
+```
+
+**当前阶段：** 只记录经验，不在规划时引用。后续可扩展为 planner 读取经验辅助规划。
+
+### 4.6 Synthesize 节点（汇总）
+
+**职责：** 汇总所有步骤结果，生成最终输出
+
+**逻辑：**
+```
+1. LLM 基于 step_results 综合回答 user_request
+2. 输出 final_answer
+```
+
+**提示词：** `prompts/synthesize.md`
+
+### 4.7 Worker 子图（ReAct + 反思）
+
+每个 Worker（code_analyzer / case_reviewer）是独立的 ReAct + Reflection 子图，作为主图节点注册。
+
+**子图内部结构：**
+
+```
+START → agent → (有工具调用?) → tools → agent (循环)
+                ↓ (无工具调用)
+                reflect → (质量不通过?) → agent (重试，max_reflections 控制)
+                ↓ (质量通过或超次)
+                END → 返回 result
+```
+
+**节点：**
+1. `agent` — LLM 绑定工具，处理 messages，决定调用工具或直接回答
+2. `tools` — ToolNode，执行工具调用
+3. `reflect` — LLM 评估结果质量
+
+**反思逻辑（reflect 节点）：**
+```
+1. 检查 max_reflections，如果为 0 → 跳过反思，直接通过
+2. LLM 评估结果质量
+3. 通过 → error = "no"
+4. 不通过 → error = "yes", reflection_count += 1, 反馈写回 messages
+5. 超过 max_reflections → 强制通过
+```
+
+**条件路由（reflect 后）：**
+```python
+def worker_route(state: WorkerState) -> Literal["agent", "__end__"]:
+    if state["error"] == "no":
+        return "__end__"
+    if state.get("reflection_count", 0) >= state.get("max_reflections", 0):
+        return "__end__"  # 超次强制结束
+    return "agent"  # 重试
+```
+
+**code_analyzer 子图工具：** `ClaudeCliTool`
+**case_reviewer 子图工具：** `ClaudeCliTool`、`TestCaseParserTool`、`BusinessKnowledgeTool`
+
+**子图构建工厂：**
+```python
+def build_worker_graph(tools: list) -> CompiledGraph:
+    """构建 ReAct + Reflection Worker 子图"""
+    graph = StateGraph(WorkerState)
+    graph.add_node("agent", agent_node)
+    graph.add_node("tools", ToolNode(tools))
+    graph.add_node("reflect", worker_reflect)
+    
+    graph.add_edge(START, "agent")
+    graph.add_conditional_edges("agent", tools_condition, {"tools": "tools", "__end__": "reflect"})
+    graph.add_edge("tools", "agent")
+    graph.add_conditional_edges("reflect", worker_route, {"agent": "agent", "__end__": END})
+    
+    return graph.compile()
+```
+
+**子图编译与注册：**
+```python
+code_analyzer_graph = build_worker_graph(code_analyzer_tools)
+case_reviewer_graph = build_worker_graph(case_reviewer_tools)
+
+# 作为主图节点注册
+supervisor_graph.add_node("code_analyzer", code_analyzer_graph)
+supervisor_graph.add_node("case_reviewer", case_reviewer_graph)
+```
+
+**提示词：** `prompts/worker_reflect.md`
 
 ## 5. 图编排（Graph Builder）
 
 ### 5.1 节点与边
 
 ```python
-graph = StateGraph(TestAgentState)
+graph = StateGraph(SupervisorState)
 
 # 添加节点
-graph.add_node("supervisor", supervisor_node)
-graph.add_node("code_analyzer", code_analyzer_node)
-graph.add_node("case_reviewer", case_reviewer_node)
+graph.add_node("planner", planner_node)
+graph.add_node("confirm_plan", confirm_plan_node)
+graph.add_node("dispatch", dispatch_node)
+graph.add_node("code_analyzer", code_analyzer_graph)      # Worker 子图
+graph.add_node("case_reviewer", case_reviewer_graph)      # Worker 子图
+graph.add_node("reflect", supervisor_reflect_node)
+graph.add_node("synthesize", synthesize_node)
+graph.add_node("save_experience", save_experience_node)
 
 # 固定边
-graph.add_edge(START, "supervisor")
-graph.add_edge("code_analyzer", "supervisor")
-graph.add_edge("case_reviewer", "supervisor")
+graph.add_edge(START, "planner")
+graph.add_edge("code_analyzer", "dispatch")                # Worker 完成后回 dispatch
+graph.add_edge("case_reviewer", "dispatch")                # Worker 完成后回 dispatch
+graph.add_edge("synthesize", "save_experience")
+graph.add_edge("save_experience", END)
 
-# 条件边：Supervisor 决策路由
+# 条件边 1：planner 后路由（首次→confirm_plan，重新规划→confirm_plan）
 graph.add_conditional_edges(
-    "supervisor",
-    route_decision,
+    "planner",
+    lambda state: "confirm_plan",
+    {"confirm_plan": "confirm_plan"}
+)
+
+# 条件边 2：confirm_plan 后路由（确认→dispatch，拒绝未超限→planner，拒绝超限→END）
+graph.add_conditional_edges(
+    "confirm_plan",
+    route_from_confirm,
     {
-        "analyze": "code_analyzer",
-        "review": "case_reviewer",
+        "dispatch": "dispatch",
+        "planner": "planner",
         "end": END
+    }
+)
+
+# 条件边 3：dispatch 路由到 Worker 或 reflect
+graph.add_conditional_edges(
+    "dispatch",
+    route_from_dispatch,
+    {
+        "code_analyzer": "code_analyzer",
+        "case_reviewer": "case_reviewer",
+        "reflect": "reflect"
+    }
+)
+
+# 条件边 4：reflect 后路由（replan / synthesize）
+graph.add_conditional_edges(
+    "reflect",
+    route_from_reflect,
+    {
+        "planner": "planner",        # replan
+        "synthesize": "synthesize"   # 完成
     }
 )
 ```
 
-### 5.2 执行流程
+### 5.2 条件路由函数
+
+```python
+def route_from_confirm(state: SupervisorState) -> Literal["dispatch", "planner", "end"]:
+    """confirm_plan 后路由：确认→dispatch，拒绝→planner（重试），超限→end"""
+    if state.get("plan") and state["plan"].confirmed:
+        return "dispatch"
+    if state.get("confirm_retry_count", 0) >= state.get("max_confirm_retries", 3):
+        return "end"  # 超限取消
+    return "planner"  # 拒绝但未超限，重新规划
+
+
+def route_from_dispatch(state: SupervisorState) -> Literal["code_analyzer", "case_reviewer", "reflect"]:
+    """dispatch 后路由：还有步骤→Worker，全部完成→reflect"""
+    if state["current_step_index"] >= len(state["plan"].steps):
+        return "reflect"
+    agent = state["plan"].steps[state["current_step_index"]].agent
+    return agent
+
+
+def route_from_reflect(state: SupervisorState) -> Literal["planner", "synthesize"]:
+    """reflect 后路由：需要 replan→planner，完成→synthesize"""
+    if state.get("needs_replan") and state.get("plan_iterations", 0) < state.get("max_plan_iterations", 1):
+        return "planner"
+    return "synthesize"
+```
+
+### 5.3 完整执行流程
 
 ```
-用户输入（模块名、commit、用例）
+用户输入 user_request（自然语言）
     ↓
-START → Supervisor
-    ↓ 判断：无 code_change_report
+START → Planner
+    ├─ 解析 user_request
+    ├─ 提取参数
+    └─ 生成 ExecutionPlan
     ↓
-CodeAnalyzer
-    ├─ GitDiffTool 提取变更
-    ├─ ClaudeCliTool 分析变更
-    └─ 输出 code_change_report
+ConfirmPlan（interrupt，等待用户确认）
+    ├─ 展示计划
+    └─ 用户确认 → plan.confirmed = True
     ↓
-Supervisor
-    ↓ 判断：有 report，有用例，无 review_results
+Dispatch
+    ↓ 读取 plan.steps[0] → code_analyzer 子图
     ↓
-CaseReviewer
-    ├─ TestCaseParserTool 解析用例
-    ├─ BusinessKnowledgeTool 查询业务知识（可选）
-    ├─ ClaudeCliTool 评审用例
-    └─ 输出 review_results
+CodeAnalyzer（ReAct 子图）
+    ├─ agent: LLM + ClaudeCliTool
+    ├─ tools: 执行工具调用
+    ├─ reflect: 评估结果质量（max_reflections=0 默认跳过）
+    └─ 返回 result → code_change_report
     ↓
-Supervisor
-    ↓ 判断：所有任务完成
+Dispatch
+    ↓ 读取 plan.steps[1] → case_reviewer 子图
     ↓
-END → 输出 review_results
+CaseReviewer（ReAct 子图）
+    ├─ agent: LLM + ClaudeCliTool + TestCaseParserTool + BusinessKnowledgeTool
+    ├─ tools: 执行工具调用
+    ├─ reflect: 评估结果质量
+    └─ 返回 result → review_results
+    ↓
+Dispatch
+    ↓ current_step_index >= len(steps) → reflect
+    ↓
+Reflect（监督者反思）
+    ├─ LLM 评估整体结果
+    ├─ COMPLETE → synthesize
+    └─ REPLAN → planner（受 max_plan_iterations 限制）
+    ↓
+Synthesize
+    ├─ 汇总 step_results
+    └─ 生成 final_answer
+    ↓
+SaveExperience
+    ├─ 记录规划与执行经验
+    ├─ LLM 去重判断
+    └─ 写入 reflection_experience.md
+    ↓
+END → 输出 final_answer
+```
+
+### 5.4 直接调用模式
+
+```python
+# main.py 中
+def is_simple_request(user_request: str) -> bool:
+    """判断是否为简单请求，可直接调用单个 Worker。
+    MVP 阶段用关键词匹配，后续可改为 LLM 判断。"""
+    single_agent_keywords = {
+        "code_analyzer": ["分析代码", "代码变更", "code change", "git diff"],
+        "case_reviewer": ["评审用例", "测试用例评审", "case review"],
+    }
+    ...
+
+if is_simple_request(user_request):
+    # 直接调用 Worker 子图
+    worker_input = {
+        "task": user_request,
+        "messages": [{"role": "user", "content": user_request}],
+        "error": "no",
+        "reflection_count": 0,
+        "max_reflections": 0,
+        "output_key": "code_change_report",  # 根据 Worker 类型
+        "result": "",
+    }
+    result = worker_app.invoke(worker_input)
+else:
+    # 走监督者主图
+    result = supervisor_app.invoke({
+        "user_request": user_request,
+        "current_step_index": 0,
+        "step_results": [],
+        "needs_replan": False,
+        "plan_iterations": 0,
+        "max_plan_iterations": 1,
+        "messages": [],
+        ...
+    })
 ```
 
 ## 6. 工具层设计
 
-### 6.1 GitDiffTool
+与 v1 相同，无变更：
 
-**功能**：提取指定模块在 commit 范围内的代码变更
+- **ClaudeCliTool** — 封装 `claude -p` 调用
+- **TestCaseParserTool** — 统一解析用例输入
+- **BusinessKnowledgeTool** — 按模块查询业务知识
 
-**参数**：
-- `module_name`: `str` — 模块路径
-- `source_commit`: `str` — 源 commit
-- `target_commit`: `str` — 目标 commit
-
-**实现**：调用 `subprocess.run(["git", "diff", f"{src}..{tgt}", "--", f"{module}/"])`
-
-### 6.2 ClaudeCliTool
-
-**功能**：封装 `claude -p` 命令调用，将 prompt 传递给 Claude CLI 并返回结果
-
-**参数**：
-- `prompt`: `str` — 要传递给 Claude CLI 的完整提示词
-- `model`: `str` — 可选，指定模型（默认从 config 读取）
-
-**实现**：调用 `subprocess.run(["claude", "-p", prompt], capture_output=True)`
-
-### 6.3 TestCaseParserTool
-
-**功能**：统一解析单条和批量用例输入
-
-**参数**：
-- `input_data`: `str` — 原始输入（JSON/Excel/纯文本）
-- `format`: `str` — 输入格式：`json` / `excel` / `text`
-
-**输出**：统一为 `list[dict]`，每个 dict 包含 `case_id`, `title`, `steps`, `expected_result` 等字段
-
-### 6.4 BusinessKnowledgeTool
-
-**功能**：根据模块名查询相关业务知识
-
-**参数**：
-- `module_name`: `str` — 模块名称
-- `query`: `str` — 可选，补充查询条件
-
-**实现**：从本地知识库（JSON/YAML 文件或向量数据库）检索匹配的业务描述
+工具由 Worker 子图的 agent 节点绑定，不在主图中直接使用。
 
 ## 7. Skill 层设计
 
-### 7.1 设计目的
-
-`skills/` 目录存放 **Claude CLI Skill**，供本项目的智能体在运行时通过 `ClaudeCliTool` 间接调用。
-
-**调用链路**：
-
-```
-本项目的 LangGraph 智能体 (CodeAnalyzer / CaseReviewer)
-    ↓ 调用 ClaudeCliTool
-Claude CLI (claude -p)
-    ↓ 加载并使用 Skill
-Skill 完成特定子任务（如代码变更分析、用例评审）
-    ↓ 返回结果
-Claude CLI 返回输出
-    ↓
-智能体接收结果，写入 state
-```
-
-**部署方式**：将 `skills/` 下的 skill 目录复制到 Claude 用户级 skill 目录（如 `~/.claude/skills/`），Claude CLI 启动时自动加载。
-
-### 7.2 Skill 结构
-
-```
-skills/
-├── readme.md                        # Skill 安装与使用说明
-├── code_analysis_skill/             # 代码分析 Skill
-│   └── SKILL.md                     # Skill 元数据：代码变更分析指令
-└── case_review_skill/               # 用例评审 Skill
-    └── SKILL.md                     # Skill 元数据：测试用例评审指令
-```
-
-每个 Skill 是一个独立目录，仅包含 `SKILL.md`。Claude CLI 通过 `SKILL.md` 中的元数据识别和加载 skill。
-
-### 7.3 Skill 内容示例
-
-**`code_analysis_skill/SKILL.md`**：
-- 定义代码变更分析的指令模板
-- 规定输出格式（变更概述、影响文件、关键逻辑变更、影响范围评估）
-- 定义输入参数占位符（`{{module_name}}`、`{{diff_content}}`、`{{commit_msg}}`）
-
-**`case_review_skill/SKILL.md`**：
-- 定义测试用例评审的指令模板
-- 规定输出格式（verdict、score、issues、suggestions、coverage_assessment）
-- 定义输入参数占位符（`{{code_change_report}}`、`{{test_cases}}`、`{{business_knowledge}}`）
-
-### 7.4 调用方式
-
-本项目的智能体通过 `ClaudeCliTool` 调用 Claude CLI，prompt 中嵌入 skill 触发指令：
-
-```python
-# CodeAnalyzer 中
-prompt = f"""
-分析以下代码变更：
-模块：{module_name}
-Commit：{source_commit}..{target_commit}
-变更内容：\n{diff_content}
-
-请使用 code_analysis_skill 进行结构化分析。
-"""
-claude_cli_tool.run({"prompt": prompt})
-
-# CaseReviewer 中
-prompt = f"""
-基于以下代码变更报告评审测试用例：
-变更报告：\n{code_change_report}
-用例列表：\n{test_cases}
-业务知识：\n{business_knowledge}
-
-请使用 case_review_skill 进行结构化评审。
-"""
-claude_cli_tool.run({"prompt": prompt})
-```
+与 v1 相同，无变更。
 
 ## 8. 错误处理
 
 | 场景 | 处理方式 |
 |---|---|
-| `git diff` 执行失败（commit 不存在/模块不存在） | 返回错误信息到 state，Supervisor 可决策重试或终止 |
-| `claude -p` 超时/失败 | 捕获异常，将错误作为 ToolMessage 返回，Agent 提示用户检查 Claude CLI 配置 |
-| 用例格式错误 | `TestCaseParserTool` 返回结构化错误，Supervisor 终止流程并提示用户修正输入 |
-| 业务知识库未命中 | 返回空字符串继续执行，不阻塞评审流程 |
+| Planner 无法理解意图 | `plan` 为 None，返回错误提示要求用户补充说明 |
+| Planner 输出格式异常 | 重试一次，仍失败则 error 终止 |
+| 用户拒绝计划 | 返回修改意图或终止 |
+| Worker 步骤失败 | 记录 step_results，dispatch 继续下一步 |
+| Worker 反思超次 | max_reflections 到达后强制通过 |
+| 监督者反思 REPLAN | 回 planner 重规划，max_plan_iterations 到达后强制 synthesize |
+| Worker 子图内工具异常 | ToolNode 捕获，返回错误消息给 agent 重试 |
+| 经验写入失败 | 静默跳过，不影响主流程 |
+| 用例格式错误 | TestCaseParserTool 返回结构化错误 |
+| 业务知识库未命中 | 返回空字符串继续执行 |
 
-## 9. 扩展性考虑
+## 9. 扩展性
 
-- **增加 Worker**：在 `agents/` 下新增智能体文件，在 `supervisor.py` 的决策逻辑中增加路由分支即可
-- **替换模型**：通过 `config.py` 统一配置 LLM 模型，所有 Agent 节点读取同一配置
-- **新增工具**：在 `tools/` 下新增工具文件，在对应 Agent 的 `bind_tools` 中注册
-- **切换为子图模式**：未来 Worker 数量增多时，可将 `case_reviewer` 拆分为独立子图（内部再分单条/批量 Worker），Supervisor 调用子图即可
+- **增加 Worker**：新增 agent 文件 + tools，在 `worker_base.py` 中注册，在 Planner prompt 中补充能力描述，dispatch 路由映射中增加对应关系
+- **替换模型**：通过 `config.py` 统一配置
+- **新增 Tool**：在 `tools/` 下新增，在对应 Worker 子图中绑定
+- **经验引用**：后续可扩展 planner 读取 `reflection_experience.md` 辅助规划
+- **条件分支**：未来可在 ExecutionPlan 中增加条件步骤，dispatch 评估条件后决定路由
 
 ## 10. 依赖
 
 ```
 langgraph
 langchain-core
-langchain-openai  # 或其他模型 provider
+langchain-openai
 pydantic
 ```
 
 Claude CLI 需单独安装并配置到 PATH 中。
 
----
+## 11. 与之前版本的关键差异
 
-<!-- AUTONOMOUS DECISION LOG -->
-## Autoplan Review Decision Audit Trail
+| 维度 | v1（Supervisor 模式） | v2（Plan-and-Solve） | v3（Plan-and-Solve + Reflection） |
+|---|---|---|---|
+| 用户输入 | CLI 结构化参数 | 自然语言 user_request | 自然语言 user_request |
+| 监督者范式 | 硬编码 if-else 路由 | Planner + Executor | Planner + Dispatch + Reflect |
+| 监督者反思 | 无 | 无 | 全步骤完成后 LLM 评估，可 replan |
+| Worker 范式 | 简单执行 | 简单执行 | ReAct + 反思子图 |
+| Worker 反思 | 无 | 无 | LLM 评估结果质量，可重试 |
+| 子图集成 | 无 | 无 | Worker 子图作为主图节点注册 |
+| 经验记录 | 无 | 无 | 规划与执行经验持久记录 |
+| 直接调用 | 不支持 | 不支持 | main.py 中直接调 worker_app |
+| 用户确认 | 无 | 有（interrupt） | 有（interrupt） |
+| 参数来源 | 用户直接提供 | Planner 从自然语言提取 | Planner 从自然语言提取 |
+| 步骤间数据传递 | 隐式 | 显式 input_mapping + ${} | 显式 input_mapping + ${} |
 
-Captured: 2026-05-15 | Reviewer: Claude subagent only (Codex unavailable)
+## 12. 反思与经验机制详解
 
-| # | Phase | Decision | Classification | Principle | Rationale |
-|---|-------|----------|----------------|-----------|-----------|
-| 1 | CEO | 保留「评审测试用例」定位（不改为生成测试） | User Challenge rejected | P6 (用户方向优先) | 用户明确选择保留当前设计，接受风险 |
-| 2 | CEO | 保留 LangGraph Supervisor 架构 | User Challenge rejected | P6 (用户方向优先) | 用户选择保留，后续实现中验证 |
-| 3 | CEO | 保留 Claude CLI 子进程调用方式 | User Challenge rejected | P6 (用户方向优先) | 用户选择保留，作为 Skill 的核心链路 |
-| 4 | Eng | 不添加 checkpointing（当前 scope 内） | Auto-decided | P3 (pragmatic) | MVP 阶段可用 InMemorySaver，后续升级 |
-| 5 | Eng | 接受 diff 大小风险（后续加阈值） | Auto-decided | P3 (pragmatic) | 首版不加复杂分块，先验证核心流程 |
-| 6 | Eng | 在实现阶段添加输入验证（SHA 正则、路径净化） | Auto-decided | P1 (completeness) | 安全风险必须在首版修复 |
-| 7 | DX | 不拆分 README/ARCHITECTURE（当前 scope 内） | Auto-decided | P3 (pragmatic) | 首版用单一 readme，后续拆分 |
-| 8 | DX | 在实现阶段添加入口点（main.py + CLI） | Auto-decided | P1 (completeness) | DX 关键缺口，必须修复 |
+### 12.1 监督者反思（层级间反思）
 
-### Review Scores Summary
-- CEO: 8/10 — 定位清晰但缺少竞争分析和护城河设计
-- Eng: 7/10 — 架构合理但缺少安全校验和 checkpointing
-- DX: 6/10 — 缺少快速开始和入口点
+| 项目 | 说明 |
+|---|---|
+| 触发条件 | 所有步骤执行完成后 |
+| 评估方式 | LLM 评估 plan + step_results 是否完整正确地解决 user_request |
+| 通过处理 | needs_replan=False → synthesize |
+| 不通过处理 | needs_replan=True → 回 planner 重规划 |
+| 安全限制 | max_plan_iterations（默认 1，即不重新规划）防止死循环 |
 
-### Critical Items Deferred to Implementation
-1. 输入验证（commit SHA 正则、路径净化）— 必须在首版实现
-2. 命令注入防护 — 必须在首版实现
-3. `main.py` 入口点和 CLI 封装 — 必须在首版实现
-4. 测试计划 — 实施阶段补充
+### 12.2 Worker 反思（层级内反思）
+
+| 项目 | 说明 |
+|---|---|
+| 触发条件 | agent 执行完（无工具调用后） |
+| 评估方式 | LLM 评估结果质量 |
+| 通过处理 | error="no" → 子图结束 |
+| 不通过处理 | error="yes" → 反馈写回 messages，agent 重试 |
+| 安全限制 | max_reflections（默认 0，即默认不重试） |
+
+### 12.3 经验记录
+
+| 项目 | 说明 |
+|---|---|
+| 触发条件 | 每次 synthesize 后 |
+| 记录内容 | 意图、规划、结果、反思反馈 |
+| 去重方式 | LLM 语义判断是否与已有经验重复 |
+| 存储位置 | data/reflection_experience.md |
+| 当前使用 | 只记录，不引用 |
+| 未来扩展 | planner 读取经验辅助规划 |

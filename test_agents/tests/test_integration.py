@@ -1,13 +1,10 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from test_agents.main import run_test_agents
 
 
 def test_full_pipeline_mocked():
     """测试完整流程（使用 mock）"""
-    with patch("test_agents.tools.git_diff.GitDiffTool.run") as mock_git, \
-         patch("test_agents.tools.claude_cli.ClaudeCliTool.run") as mock_claude:
-
-        mock_git.return_value = "diff --git a/order.py b/order.py\n+def new(): pass"
+    with patch("test_agents.tools.claude_cli.ClaudeCliTool.run") as mock_claude:
         mock_claude.side_effect = [
             "## 变更概述\n新增订单功能",
             '[{"case_id": "TC001", "verdict": "pass", "score": 90}]',
@@ -27,8 +24,8 @@ def test_full_pipeline_mocked():
 
 def test_pipeline_with_error():
     """测试错误处理流程"""
-    with patch("test_agents.tools.git_diff.GitDiffTool.run") as mock_git:
-        mock_git.return_value = "错误: git diff 失败"
+    with patch("test_agents.tools.claude_cli.ClaudeCliTool.run") as mock_claude:
+        mock_claude.return_value = "错误: Claude CLI 调用失败"
 
         result = run_test_agents(
             module_name="order",
@@ -36,4 +33,4 @@ def test_pipeline_with_error():
             target_commit="e4f5a6b",
         )
 
-        assert "error" in result or result.get("code_change_report", "").startswith("错误")
+        assert "error" in result

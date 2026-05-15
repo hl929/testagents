@@ -2,6 +2,7 @@
 
 import json
 from test_agents.tools.claude_cli import ClaudeCliTool
+from test_agents.prompts.loader import load_prompt
 
 
 def case_reviewer_node(state) -> dict:
@@ -24,39 +25,16 @@ def case_reviewer_node(state) -> dict:
     if not test_cases:
         return {"review_results": []}
 
-    # 构建用例文本
     cases_text = json.dumps(test_cases, ensure_ascii=False, indent=2)
 
-    # 调用 Claude CLI 评审
+    prompt = load_prompt(
+        "case_reviewer",
+        code_change_report=code_change_report,
+        business_knowledge=business_knowledge or "无",
+        cases_text=cases_text,
+    )
+
     claude_tool = ClaudeCliTool()
-
-    prompt = f"""请基于以下代码变更报告评审测试用例：
-
-## 代码变更报告
-{code_change_report}
-
-## 业务知识
-{business_knowledge or "无"}
-
-## 待评审用例
-{cases_text}
-
-请输出 JSON 格式的评审结果：
-```json
-[
-  {{
-    "case_id": "TC001",
-    "title": "...",
-    "verdict": "pass|fail|needs_improvement",
-    "score": 85,
-    "issues": ["..."],
-    "suggestions": ["..."],
-    "coverage_assessment": "..."
-  }}
-]
-```
-"""
-
     review = claude_tool.run({"prompt": prompt})
 
     if review.startswith("错误:"):
@@ -64,7 +42,6 @@ def case_reviewer_node(state) -> dict:
 
     # 尝试解析 JSON
     try:
-        # 提取 JSON 块
         if "```json" in review:
             json_str = review.split("```json")[1].split("```")[0].strip()
         elif "```" in review:
