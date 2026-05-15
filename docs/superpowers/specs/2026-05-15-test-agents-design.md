@@ -381,3 +381,32 @@ pydantic
 ```
 
 Claude CLI 需单独安装并配置到 PATH 中。
+
+---
+
+<!-- AUTONOMOUS DECISION LOG -->
+## Autoplan Review Decision Audit Trail
+
+Captured: 2026-05-15 | Reviewer: Claude subagent only (Codex unavailable)
+
+| # | Phase | Decision | Classification | Principle | Rationale |
+|---|-------|----------|----------------|-----------|-----------|
+| 1 | CEO | 保留「评审测试用例」定位（不改为生成测试） | User Challenge rejected | P6 (用户方向优先) | 用户明确选择保留当前设计，接受风险 |
+| 2 | CEO | 保留 LangGraph Supervisor 架构 | User Challenge rejected | P6 (用户方向优先) | 用户选择保留，后续实现中验证 |
+| 3 | CEO | 保留 Claude CLI 子进程调用方式 | User Challenge rejected | P6 (用户方向优先) | 用户选择保留，作为 Skill 的核心链路 |
+| 4 | Eng | 不添加 checkpointing（当前 scope 内） | Auto-decided | P3 (pragmatic) | MVP 阶段可用 InMemorySaver，后续升级 |
+| 5 | Eng | 接受 diff 大小风险（后续加阈值） | Auto-decided | P3 (pragmatic) | 首版不加复杂分块，先验证核心流程 |
+| 6 | Eng | 在实现阶段添加输入验证（SHA 正则、路径净化） | Auto-decided | P1 (completeness) | 安全风险必须在首版修复 |
+| 7 | DX | 不拆分 README/ARCHITECTURE（当前 scope 内） | Auto-decided | P3 (pragmatic) | 首版用单一 readme，后续拆分 |
+| 8 | DX | 在实现阶段添加入口点（main.py + CLI） | Auto-decided | P1 (completeness) | DX 关键缺口，必须修复 |
+
+### Review Scores Summary
+- CEO: 8/10 — 定位清晰但缺少竞争分析和护城河设计
+- Eng: 7/10 — 架构合理但缺少安全校验和 checkpointing
+- DX: 6/10 — 缺少快速开始和入口点
+
+### Critical Items Deferred to Implementation
+1. 输入验证（commit SHA 正则、路径净化）— 必须在首版实现
+2. 命令注入防护 — 必须在首版实现
+3. `main.py` 入口点和 CLI 封装 — 必须在首版实现
+4. 测试计划 — 实施阶段补充
