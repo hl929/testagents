@@ -15,14 +15,17 @@ class Config:
     CLAUDE_TIMEOUT: int = int(os.getenv("TEST_AGENTS_CLAUDE_TIMEOUT", "120"))
     CLAUDE_MAX_RETRIES: int = int(os.getenv("TEST_AGENTS_CLAUDE_RETRIES", "2"))
 
-    # Git 配置
-    GIT_TIMEOUT: int = int(os.getenv("TEST_AGENTS_GIT_TIMEOUT", "30"))
-
-    # Diff 配置
-    MAX_DIFF_SIZE: int = int(os.getenv("TEST_AGENTS_MAX_DIFF_SIZE", "100000"))
-
     # 业务知识库路径
     KNOWLEDGE_DIR: str = os.getenv("TEST_AGENTS_KNOWLEDGE_DIR", "")
+
+    # v3 Plan-and-Solve + Reflection 配置
+    MAX_PLAN_ITERATIONS: int = int(os.getenv("TEST_AGENTS_MAX_PLAN_ITERATIONS", "1"))
+    MAX_CONFIRM_RETRIES: int = int(os.getenv("TEST_AGENTS_MAX_CONFIRM_RETRIES", "3"))
+    MAX_WORKER_REFLECTIONS: int = int(os.getenv("TEST_AGENTS_MAX_WORKER_REFLECTIONS", "0"))
+    EXPERIENCE_FILE: str = os.getenv(
+        "TEST_AGENTS_EXPERIENCE_FILE",
+        os.path.join(os.path.dirname(__file__), "data", "reflection_experience.md"),
+    )
 
 
 config = Config()
