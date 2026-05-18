@@ -5,10 +5,10 @@ from langchain_core.messages import HumanMessage
 
 from test_agents.agents.worker_base import build_worker_graph
 from test_agents.graph.state import SupervisorState, WorkerState
-from test_agents.tools.langchain_adapters import claude_cli, parse_test_cases, query_business_knowledge
+from test_agents.tools.base import ToolRegistry
 
 
-_case_reviewer_tools = [claude_cli, parse_test_cases, query_business_knowledge]
+_case_reviewer_tools = ToolRegistry.get_tools_by_names(["claude_cli", "parse_test_cases", "query_business_knowledge"])
 case_reviewer_graph = None
 
 

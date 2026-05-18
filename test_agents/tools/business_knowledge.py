@@ -2,26 +2,29 @@
 
 import json
 import os
-from typing import Dict, Any
+
+from pydantic import BaseModel, Field
+
+from test_agents.tools.base import TestAgentTool
+from test_agents.config import config
 
 
-class BusinessKnowledgeTool:
-    """根据模块名查询相关业务知识"""
+class BusinessKnowledgeTool(TestAgentTool):
+    name: str = "query_business_knowledge"
+    description: str = "查询模块相关的业务知识。module_name 为模块名称。"
 
-    def __init__(self, knowledge_dir: str = ""):
-        self.knowledge_dir = knowledge_dir or os.path.join(os.path.dirname(__file__), "..", "knowledge")
-        self.name = "business_knowledge"
-        self.description = "查询模块相关的业务知识"
+    class InputSchema(BaseModel):
+        module_name: str = Field(description="模块名称")
 
-    def run(self, parameters: Dict[str, Any]) -> str:
-        """查询业务知识"""
-        module_name = parameters.get("module_name", "")
+    args_schema: type = InputSchema
 
+    def _run(self, module_name: str) -> str:
         if not module_name:
             return ""
 
-        # 尝试从本地 JSON 知识库加载
-        knowledge_file = os.path.join(self.knowledge_dir, f"{module_name}.json")
+        knowledge_dir = config.KNOWLEDGE_DIR or os.path.join(os.path.dirname(__file__), "..", "knowledge")
+        knowledge_file = os.path.join(knowledge_dir, f"{module_name}.json")
+
         if os.path.exists(knowledge_file):
             try:
                 with open(knowledge_file, "r", encoding="utf-8") as f:
@@ -30,10 +33,4 @@ class BusinessKnowledgeTool:
             except Exception:
                 pass
 
-        # 返回空字符串，不阻塞流程
         return ""
-
-    def get_parameters(self) -> list[dict]:
-        return [
-            {"name": "module_name", "type": "string", "description": "模块名称", "required": True},
-        ]

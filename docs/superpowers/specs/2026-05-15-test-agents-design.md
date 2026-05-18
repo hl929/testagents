@@ -73,6 +73,7 @@ test_agents/
 │   └── case_reviewer.py         # 用例评审智能体（Worker 子图定义 + 工具绑定）
 ├── tools/                       # 公共工具层
 │   ├── __init__.py
+│   ├── base.py                  # TestAgentTool 基类 + ToolRegistry 自动注册表
 │   ├── claude_cli.py
 │   ├── test_case_parser.py
 │   └── business_knowledge.py
@@ -687,13 +688,136 @@ else:
 
 ## 6. 工具层设计
 
-与 v1 相同，无变更：
+### 6.1 架构变更
 
-- **ClaudeCliTool** — 封装 `claude -p` 调用
-- **TestCaseParserTool** — 统一解析用例输入
-- **BusinessKnowledgeTool** — 按模块查询业务知识
+v3 重构工具层，采用 **TestAgentTool 基类 + ToolRegistry 自动注册表** 模式，消除 v1/v2 的 `@tool` 适配层：
 
-工具由 Worker 子图的 agent 节点绑定，不在主图中直接使用。
+```
+v1/v2（三层）:
+  原始工具类(ClaudeCliTool) → @tool适配器(langchain_adapters.py) → bind_tools
+
+v3（两层）:
+  TestAgentTool子类 ──→ ToolRegistry ──→ bind_tools / render_all()
+```
+
+工具直接继承 LangChain `BaseTool`，**工具本身即是 LangChain 工具**，无需额外适配层。
+
+### 6.2 核心组件
+
+#### TestAgentTool（工具基类）
+
+所有项目工具统一继承 `TestAgentTool(BaseTool)`，子类定义时自动注册类到 `ToolRegistry`：
+
+```python
+class TestAgentTool(BaseTool):
+    """项目工具基类，子类定义时自动注册类到 ToolRegistry，使用时懒实例化"""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if not getattr(cls, "__abstractmethods__", None):
+            ToolRegistry._tool_classes[getattr(cls, "name", cls.__name__)] = cls
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        ToolRegistry.register(self)
+```
+
+工具定义示例：
+
+```python
+class ClaudeCliTool(TestAgentTool):
+    name: str = "claude_cli"
+    description: str = "调用 Claude CLI 执行分析任务。prompt 为完整提示词，model 为可选模型名。"
+
+    class InputSchema(BaseModel):
+        prompt: str = Field(description="传递给 Claude CLI 的完整提示词")
+        model: str = Field(default="", description="指定模型（可选）")
+
+    args_schema: type = InputSchema
+
+    def _run(self, prompt: str, model: str = "") -> str:
+        ...
+```
+
+#### ToolRegistry（自动注册表）
+
+统一管理所有工具实例，提供查询和渲染接口：
+
+```python
+class ToolRegistry:
+    _tools: dict[str, BaseTool] = {}       # 已实例化的工具
+    _tool_classes: dict[str, type] = {}    # 已注册的工具类（懒实例化）
+
+    @classmethod
+    def get_all(cls) -> list[BaseTool]: ...
+
+    @classmethod
+    def get_by_name(cls, name: str) -> BaseTool | None: ...
+
+    @classmethod
+    def get_tools_by_names(cls, names: list[str]) -> list[BaseTool]: ...
+
+    @classmethod
+    def render_all(cls) -> str: ...         # 渲染工具描述供 Planner prompt 使用
+```
+
+**懒实例化机制：** 子类定义时只注册类定义（`__init_subclass__`），首次调用 `get_all` / `get_by_name` / `get_tools_by_names` 时才实例化，避免 import 时的副作用。
+
+### 6.3 工具列表
+
+| 工具 | 类名 | 描述 | 绑定 Worker |
+|---|---|---|---|
+| `claude_cli` | `ClaudeCliTool` | 封装 `claude -p` 调用 | code_analyzer, case_reviewer |
+| `parse_test_cases` | `TestCaseParserTool` | 统一解析 JSON/Text 用例输入 | case_reviewer |
+| `query_business_knowledge` | `BusinessKnowledgeTool` | 按模块名查询本地业务知识 | case_reviewer |
+
+### 6.4 使用方式
+
+**Worker 绑定工具：**
+
+```python
+# agents/code_analyzer.py
+from test_agents.tools.base import ToolRegistry
+
+_code_analyzer_tools = ToolRegistry.get_tools_by_names(["claude_cli"])
+
+# agents/case_reviewer.py
+_case_reviewer_tools = ToolRegistry.get_tools_by_names([
+    "claude_cli", "parse_test_cases", "query_business_knowledge"
+])
+```
+
+**Planner 动态注入工具描述：**
+
+```python
+# agents/supervisor.py - planner_node
+from test_agents.tools.base import ToolRegistry
+
+tools_info = ToolRegistry.render_all()
+prompt = load_prompt("planner", user_request=user_request, tools_info=tools_info)
+```
+
+`render_all()` 内部调用 LangChain 的 `render_text_description()` 从工具的 `name` + `description` + `args` 自动生成，无需在 prompt 中硬编码。
+
+### 6.5 新增工具流程
+
+新增工具只需两步，无需修改 Worker 或 Prompt 文件：
+
+1. **新增工具类** — 在 `tools/` 下新建 `TestAgentTool` 子类，自动注册到 `ToolRegistry`
+2. **Worker 绑定** — 在对应 Worker 的 `get_tools_by_names` 列表中添加工具名
+
+Planner prompt 中的 `{tools_info}` 由 `ToolRegistry.render_all()` 动态生成，自动包含新工具描述。
+
+### 6.6 目录结构
+
+```
+tools/
+├── __init__.py              # 触发 import，自动注册所有工具类
+├── base.py                  # TestAgentTool + ToolRegistry
+├── claude_cli.py            # ClaudeCliTool(TestAgentTool)
+├── test_case_parser.py      # TestCaseParserTool(TestAgentTool)
+└── business_knowledge.py    # BusinessKnowledgeTool(TestAgentTool)
+```
 
 ## 7. Skill 层设计
 

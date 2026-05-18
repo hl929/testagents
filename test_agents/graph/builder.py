@@ -84,10 +84,10 @@ def build_graph():
 
 
 def _get_code_analyzer_tools():
-    from test_agents.tools.langchain_adapters import claude_cli
-    return [claude_cli]
+    from test_agents.tools.base import ToolRegistry
+    return ToolRegistry.get_tools_by_names(["claude_cli"])
 
 
 def _get_case_reviewer_tools():
-    from test_agents.tools.langchain_adapters import claude_cli, parse_test_cases, query_business_knowledge
-    return [claude_cli, parse_test_cases, query_business_knowledge]
+    from test_agents.tools.base import ToolRegistry
+    return ToolRegistry.get_tools_by_names(["claude_cli", "parse_test_cases", "query_business_knowledge"])

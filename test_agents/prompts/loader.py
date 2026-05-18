@@ -18,4 +18,8 @@ def load_prompt(name: str, **kwargs) -> str:
     path = os.path.join(_PROMPTS_DIR, f"{name}.md")
     with open(path, "r", encoding="utf-8") as f:
         template = f.read()
-    return template.format(**kwargs)
+    class _Defaults(dict):
+        def __missing__(self, key):
+            return f"{{{key}}}"
+
+    return template.format_map(_Defaults(kwargs))

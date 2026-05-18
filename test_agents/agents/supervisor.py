@@ -6,22 +6,28 @@ from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
+from langchain_openai import ChatOpenAI
 
 from test_agents.config import config
 from test_agents.graph.state import SupervisorState, ExecutionPlan
 from test_agents.prompts.loader import load_prompt
+from test_agents.tools.base import ToolRegistry
 
 
 def get_llm():
-    from langchain_openai import ChatOpenAI
-    return ChatOpenAI(model=config.LLM_MODEL, api_key=config.LLM_API_KEY)
+    """Get llm response"""
+    kwargs = {"model": config.LLM_MODEL, "api_key": config.LLM_API_KEY}
+    if config.LLM_BASE_URL:
+        kwargs["base_url"] = config.LLM_BASE_URL
+    return ChatOpenAI(**kwargs)
 
 
 def planner_node(state: SupervisorState) -> dict:
     """Parse user_request and generate ExecutionPlan"""
     llm = get_llm()
     user_request = state.get("user_request", "")
-    prompt = load_prompt("planner", user_request=user_request)
+    tools_info = ToolRegistry.render_all()
+    prompt = load_prompt("planner", user_request=user_request, tools_info=tools_info)
 
     structured_llm = llm.with_structured_output(ExecutionPlan)
     plan = structured_llm.invoke([HumanMessage(content=prompt)])

@@ -7,6 +7,10 @@
 | `code_analyzer` | 分析代码变更 | module_name, source_commit, target_commit | code_change_report |
 | `case_reviewer` | 评审测试用例 | code_change_report, test_cases, business_knowledge | review_results |
 
+## 可用工具
+
+{tools_info}
+
 ## 输入
 
 用户需求：{user_request}
