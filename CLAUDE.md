@@ -27,6 +27,9 @@ python -m pytest test_agents/tests/test_integration.py::test_full_pipeline_mocke
 
 ### 运行应用
 ```bash
+# 需要先加载 .env（如未安装 python-dotenv: pip install python-dotenv）
+python -c "from dotenv import load_dotenv; load_dotenv()" && python -m test_agents
+
 # 交互模式
 python -m test_agents
 
@@ -39,8 +42,10 @@ python -m test_agents "评审测试用例" --output json
 
 ### 安装 Skills（可选）
 ```bash
-cp -r test_agents/skills/code_analysis_skill ~/.claude/skills/
-cp -r test_agents/skills/case_review_skill ~/.claude/skills/
+# 项目级 skills 已在 .claude/skills/ 中，Claude Code 自动加载
+# 如需用户级安装：
+cp -r .claude/skills/code_analysis_skill ~/.claude/skills/
+cp -r .claude/skills/case_review_skill ~/.claude/skills/
 ```
 
 ## Architecture
@@ -92,7 +97,8 @@ START → agent → (tools_condition) → tools → agent → reflect → (worke
 
 ### 工具层
 
-- **LangChain Adapters** (`test_agents/tools/langchain_adapters.py`): 将内部工具类包装为 `@tool` 装饰器函数，供 LangChain `bind_tools` 使用
+- **TestAgentTool 基类** (`test_agents/tools/base.py`): 所有工具继承 `TestAgentTool(BaseTool)`，子类定义时自动注册到 `ToolRegistry`
+- **ToolRegistry** (`test_agents/tools/base.py`): 自动注册表，提供 `get_tools_by_names()` 按 Worker 绑定工具、`render_all()` 动态生成 Planner 工具描述
 - **ClaudeCliTool** (`test_agents/tools/claude_cli.py`): 通过 `subprocess.run(["claude", "-p", prompt])` 调用 Claude CLI，有超时和重试机制
 - **TestCaseParserTool** (`test_agents/tools/test_case_parser.py`): 解析 JSON/Text 格式测试用例
 - **BusinessKnowledgeTool** (`test_agents/tools/business_knowledge.py`): 从本地 JSON 知识库查询模块业务知识
@@ -109,6 +115,7 @@ Prompt 模板存放在 `test_agents/prompts/*.md`，通过 `test_agents/prompts/
 |---|---|---|
 | `TEST_AGENTS_MODEL` | LLM 模型 | gpt-4o |
 | `OPENAI_API_KEY` | OpenAI API Key | — |
+| `OPENAI_BASE_URL` | LLM API 基地址（国内模型） | — |
 | `TEST_AGENTS_CLAUDE_TIMEOUT` | Claude CLI 超时(秒) | 120 |
 | `TEST_AGENTS_MAX_PLAN_ITERATIONS` | 最大计划迭代次数 | 1 |
 | `TEST_AGENTS_MAX_CONFIRM_RETRIES` | 最大计划确认重试次数 | 3 |
@@ -123,6 +130,7 @@ Prompt 模板存放在 `test_agents/prompts/*.md`，通过 `test_agents/prompts/
 - `test_agents/agents/code_analyzer.py` / `case_reviewer.py`: Worker 包装节点，负责 State 转换和结果提取
 - `test_agents/graph/state.py`: 所有状态定义和 Pydantic 模型
 - `test_agents/config.py`: 全局配置单例
+- `test_agents/tools/base.py`: TestAgentTool 基类 + ToolRegistry 自动注册表
 
 ## Testing Notes
 
