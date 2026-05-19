@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -152,7 +153,7 @@ def synthesize_node(state: SupervisorState) -> dict:
 
 
 def save_experience_node(state: SupervisorState) -> dict:
-    """Save planning and execution experience to file"""
+    """Save planning and execution experience to file, with dedup and atomic write."""
     user_request = state.get("user_request", "")
     plan = state.get("plan", {})
     step_results = state.get("step_results", [])
@@ -161,16 +162,27 @@ def save_experience_node(state: SupervisorState) -> dict:
     experience_file = config.EXPERIENCE_FILE
     os.makedirs(os.path.dirname(experience_file), exist_ok=True)
 
-    existing = ""
-    if os.path.exists(experience_file):
-        with open(experience_file, "r", encoding="utf-8") as f:
-            existing = f.read()
-
     intent = plan.get("intent", "")
     steps_desc = ", ".join(s.get("agent", "") for s in plan.get("steps", []))
     results_desc = "; ".join(
         f"step {r.get('step_id')}: {r.get('status')}" for r in step_results
     )
+
+    # Fingerprint for dedup
+    fingerprint = f"{intent}|{steps_desc}"
+
+    existing_entries = []
+    if os.path.exists(experience_file):
+        with open(experience_file, "r", encoding="utf-8") as f:
+            existing_text = f.read()
+        raw_entries = existing_text.split("## 经验\n")
+        for raw in raw_entries[1:]:
+            existing_entries.append("## 经验\n" + raw)
+
+    # Check dedup - 检查意图和步骤描述都包含在条目中
+    for entry in existing_entries:
+        if intent in entry and steps_desc in entry:
+            return {}  # Already recorded
 
     entry = (
         f"\n## 经验\n"
@@ -180,9 +192,18 @@ def save_experience_node(state: SupervisorState) -> dict:
         f"- **反思**: {reflection_feedback or '无'}\n"
     )
 
-    header = "# 任务规划反思经验\n" if not existing else ""
-    with open(experience_file, "a", encoding="utf-8") as f:
-        f.write(header + entry)
+    header = "# 任务规划反思经验\n" if not existing_entries else ""
+    new_content = header + "".join(existing_entries) + entry
+
+    # Atomic write
+    fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(experience_file))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        os.replace(temp_path, experience_file)
+    except Exception:
+        os.remove(temp_path)
+        raise
 
     return {}
 

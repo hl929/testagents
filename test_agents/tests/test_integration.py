@@ -246,3 +246,25 @@ def test_direct_worker_invocation_case_reviewer():
         result = run_test_agents("评审测试用例")
     assert result["outputs"]["review_results"] == '[{"case_id": "TC001", "verdict": "pass"}]'
     assert result["step_results"][0]["agent"] == "case_reviewer"
+
+
+def test_save_experience_dedup(tmp_path):
+    from test_agents.agents.supervisor import save_experience_node
+    from unittest.mock import patch
+
+    exp_file = tmp_path / "experience.md"
+    with patch("test_agents.agents.supervisor.config.EXPERIENCE_FILE", str(exp_file)):
+        state = {
+            "user_request": "test",
+            "plan": {"intent": "分析代码", "steps": [{"agent": "code_analyzer"}]},
+            "step_results": [{"step_id": 1, "status": "success"}],
+            "reflection_feedback": "",
+        }
+        # First save should write
+        save_experience_node(state)
+        assert "分析代码" in exp_file.read_text()
+
+        # Second identical save should skip
+        content_before = exp_file.read_text()
+        save_experience_node(state)
+        assert exp_file.read_text() == content_before
