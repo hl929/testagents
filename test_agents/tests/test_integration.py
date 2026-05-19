@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 from langchain_core.messages import AIMessage
 from test_agents.main import run_test_agents
 from test_agents.agents.supervisor import route_from_confirm, route_from_dispatch, route_from_reflect
-from test_agents.agents.code_analyzer import _resolve_input
+from test_agents.agents.case_reviewer import _resolve_input
 
 
 def test_route_from_confirm():
@@ -127,6 +127,20 @@ def test_resolve_input():
 
     # Test case: missing fields → return empty string
     assert _resolve_input("${nonexistent_field}", {}) == ""
+
+    # Test case: outputs reference
+    state = {
+        "outputs": {"code_change_report": "报告内容", "review_results": [{"id": "1"}]},
+        "user_request": "test"
+    }
+    assert _resolve_input("${outputs.code_change_report}", state) == "报告内容"
+    assert _resolve_input("${outputs.review_results}", state) == '[{"id": "1"}]'
+
+    # Test case: missing outputs key returns empty string
+    assert _resolve_input("${outputs.nonexistent}", state) == ""
+
+    # Test case: outputs reference when outputs is missing
+    assert _resolve_input("${outputs.code_change_report}", {}) == ""
 
 
 def test_full_pipeline_mocked():
