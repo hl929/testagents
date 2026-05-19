@@ -13,6 +13,7 @@ class PlanStep(BaseModel):
     agent: str = Field(description="执行 agent: code_analyzer / case_reviewer")
     description: str = Field(description="步骤描述")
     input_mapping: dict[str, str] = Field(default_factory=dict, description="agent入参 → state字段引用或常量")
+    output_key: str = Field(default="", description="结果写入 outputs 的 key，空则按 agent 类型默认")
 
 
 class ExecutionPlan(BaseModel):
@@ -68,6 +69,7 @@ class SupervisorState(TypedDict, total=False):
     plan_iterations: int
     confirm_retry_count: int
     max_confirm_retries: int
+    outputs: Annotated[dict, operator.or_]
     code_change_report: str
     review_results: list[dict]
     final_answer: Optional[str]

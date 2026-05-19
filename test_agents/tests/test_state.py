@@ -21,6 +21,20 @@ class TestPlanStep:
         step = PlanStep(step_id=1, agent="code_analyzer", description="test")
         assert step.input_mapping == {}
 
+    def test_output_key_field(self):
+        step = PlanStep(
+            step_id=1,
+            agent="code_analyzer",
+            description="分析代码",
+            input_mapping={},
+            output_key="code_change_report",
+        )
+        assert step.output_key == "code_change_report"
+
+    def test_output_key_defaults_to_empty_string(self):
+        step = PlanStep(step_id=1, agent="code_analyzer", description="test")
+        assert step.output_key == ""
+
 
 class TestExecutionPlan:
     def test_create_plan(self):
@@ -79,6 +93,19 @@ class TestStepResult:
         result = StepResult(step_id=1, agent="code_analyzer", status="failed", output_key="code_change_report", error="timeout")
         assert result.status == "failed"
         assert result.error == "timeout"
+
+
+class TestSupervisorStateOutputs:
+    def test_outputs_field_accepted(self):
+        state: SupervisorState = {
+            "user_request": "test",
+            "outputs": {"code_change_report": "report content"},
+        }
+        assert state["outputs"]["code_change_report"] == "report content"
+
+    def test_outputs_defaults_to_empty_dict(self):
+        state: SupervisorState = {"user_request": "test"}
+        assert state.get("outputs", {}) == {}
 
 
 class TestWorkerState:
