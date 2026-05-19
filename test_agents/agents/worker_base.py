@@ -30,6 +30,44 @@ def _resolve_input(value: str, state: SupervisorState) -> str:
     return re.sub(r'\$\{([^}]+)\}', replace_placeholder, value)
 
 
+def build_worker_task(step: dict, state: SupervisorState) -> tuple[str, list]:
+    """Build task description and message list for a worker from plan step + state.
+    Returns (task_desc, messages).
+    """
+    input_mapping = step.get("input_mapping", {})
+    task_desc = step.get("description", "")
+    resolved = {}
+    for key, value in input_mapping.items():
+        resolved[key] = _resolve_input(value, state)
+    context_parts = [task_desc]
+    if resolved.get("module_name"):
+        context_parts.append(
+            f"分析模块 {resolved['module_name']} 的代码变更，"
+            f"commit 范围: {resolved.get('source_commit', '')}..{resolved.get('target_commit', '')}"
+        )
+    if resolved.get("code_change_report"):
+        context_parts.append(f"代码变更报告:\n{resolved['code_change_report'][:3000]}")
+    if resolved.get("test_cases"):
+        context_parts.append(f"测试用例:\n{resolved['test_cases'][:2000]}")
+    if resolved.get("business_knowledge"):
+        context_parts.append(f"业务知识:\n{resolved['business_knowledge'][:1000]}")
+    return task_desc, [HumanMessage(content="\n\n".join(context_parts))]
+
+
+def extract_worker_output(worker_result: dict, output_key: str) -> dict:
+    """Extract the string result from a WorkerState result dict.
+    Falls back to the last AIMessage content if result is empty.
+    """
+    report = worker_result.get("result", "")
+    if not report:
+        messages = worker_result.get("messages", [])
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and msg.content and not getattr(msg, "tool_calls", None):
+                report = msg.content
+                break
+    return {output_key: report}
+
+
 def agent_node(state: WorkerState, llm_with_tools) -> dict:
     """Worker agent node - LLM with tool binding"""
     messages = state.get("messages", [])

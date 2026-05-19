@@ -75,15 +75,27 @@ def reflect_node(state: SupervisorState) -> dict:
     user_request = state.get("user_request", "")
     plan = state.get("plan", {})
     step_results = state.get("step_results", [])
+    outputs = state.get("outputs", {})
+    plan_iterations = state.get("plan_iterations", 0)
+    max_plan_iterations = state.get("max_plan_iterations", 1)
 
     plan_summary = json.dumps(plan.get("steps", []), ensure_ascii=False)
     step_results_summary = json.dumps(step_results, ensure_ascii=False)
+
+    output_parts = []
+    for key, value in outputs.items():
+        content = str(value)[:1000] if value else "(空)"
+        output_parts.append(f"**{key}**:\n{content}")
+    outputs_summary = "\n\n".join(output_parts) if output_parts else "(无输出)"
 
     prompt = load_prompt(
         "supervisor_reflect",
         user_request=user_request,
         plan_summary=plan_summary,
         step_results_summary=step_results_summary,
+        outputs_summary=outputs_summary,
+        plan_iterations=plan_iterations,
+        max_plan_iterations=max_plan_iterations,
     )
 
     response = llm.invoke([HumanMessage(content=prompt)])
