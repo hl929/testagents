@@ -143,6 +143,26 @@ def test_resolve_input():
     assert _resolve_input("${outputs.code_change_report}", {}) == ""
 
 
+def test_resolve_input_multi_key():
+    state = {
+        "outputs": {
+            "report_a": "Line A",
+            "report_b": "Line B",
+        }
+    }
+    result = _resolve_input("${outputs.report_a}\n${outputs.report_b}", state)
+    assert result == "Line A\nLine B"
+
+
+def test_resolve_input_mixed_text_and_refs():
+    state = {
+        "user_request": "hello",
+        "outputs": {"x": "world"},
+    }
+    result = _resolve_input("req=${user_request}, out=${outputs.x}", state)
+    assert result == "req=hello, out=world"
+
+
 def test_full_pipeline_mocked():
     """Test the complete supervisor pipeline with mocks for all external dependencies"""
     # Mock planner LLM response

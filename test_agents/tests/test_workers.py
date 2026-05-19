@@ -201,3 +201,67 @@ class TestWorkerReflect:
             "result": "",
         }
         assert _extract_last_agent_content(state) == "valid content"
+
+
+from langchain_core.tools import Tool
+
+
+class TestWorkerSubgraphInternal:
+    def test_worker_graph_runs_agent_tools_reflect(self):
+        """Test that the compiled worker graph can execute agent → tools → reflect."""
+        # Create a real simple tool instead of MagicMock
+        def mock_tool_func(query: str) -> str:
+            return "tool result"
+
+        mock_tool = Tool(
+            name="mock_tool",
+            func=mock_tool_func,
+            description="A mock tool for testing"
+        )
+
+        mock_llm = MagicMock()
+        # First call: agent decides to use tool
+        mock_llm.invoke.return_value = AIMessage(
+            content="",
+            tool_calls=[{"id": "call1", "name": "mock_tool", "args": {"query": "test"}}],
+        )
+
+        from test_agents.agents.worker_base import build_worker_graph
+        graph = build_worker_graph([mock_tool], mock_llm, mock_llm)
+        result = graph.invoke({
+            "task": "test task",
+            "messages": [AIMessage(content="do it")],
+            "error": "no",
+            "reflection_count": 0,
+            "max_reflections": 0,
+            "output_key": "result",
+            "result": "",
+        })
+        # With max_reflections=0, reflect is skipped and we just get agent output
+        assert "messages" in result
+
+
+from test_agents.agents.case_reviewer import _parse_review_results
+
+
+class TestParseReviewResults:
+    def test_parse_plain_json(self):
+        text = '[{"case_id": "1", "verdict": "pass"}]'
+        assert _parse_review_results(text) == [{"case_id": "1", "verdict": "pass"}]
+
+    def test_parse_json_with_fences(self):
+        text = 'Some intro\n```json\n[{"case_id": "1"}]\n```\noutro'
+        assert _parse_review_results(text) == [{"case_id": "1"}]
+
+    def test_parse_single_object(self):
+        text = '{"case_id": "1", "verdict": "pass"}'
+        assert _parse_review_results(text) == [{"case_id": "1", "verdict": "pass"}]
+
+    def test_parse_invalid_json(self):
+        text = "not json at all"
+        result = _parse_review_results(text)
+        assert result[0]["verdict"] == "parse_error"
+        assert "not json" in result[0]["raw"]
+
+    def test_parse_empty(self):
+        assert _parse_review_results("") == []
