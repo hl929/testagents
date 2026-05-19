@@ -134,3 +134,70 @@ class TestCaseReviewerGraph:
         assert "review_results" in result["outputs"]
         assert result["outputs"]["review_results"][0]["case_id"] == "TC001"
         assert result["current_step_index"] == 1
+
+
+from test_agents.agents.worker_base import worker_reflect, _extract_last_agent_content
+from langchain_core.messages import AIMessage
+
+
+class TestWorkerReflect:
+    def test_reflect_pass_writes_back_result(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content='{"quality": "pass", "feedback": ""}')
+        state = {
+            "task": "test",
+            "messages": [
+                AIMessage(content="first", tool_calls=[]),
+                AIMessage(content="final result"),
+            ],
+            "reflection_count": 0,
+            "max_reflections": 1,
+            "result": "",
+        }
+        result = worker_reflect(state, mock_llm)
+        assert result["error"] == "no"
+        assert result["result"] == "final result"
+
+    def test_reflect_no_max_reflections_writes_back_result(self):
+        state = {
+            "task": "test",
+            "messages": [AIMessage(content="agent output")],
+            "reflection_count": 0,
+            "max_reflections": 0,
+            "result": "",
+        }
+        result = worker_reflect(state, MagicMock())
+        assert result["error"] == "no"
+        assert result["result"] == "agent output"
+
+    def test_extract_last_agent_content_skips_tool_calls(self):
+        # Create AIMessage with tool calls by setting tool_calls as empty list
+        # since the actual format depends on langchain version
+        msg_with_tool = AIMessage(content="tool call")
+        msg_with_tool.tool_calls = [{"name": "test"}]  # Simplified format
+
+        state = {
+            "messages": [
+                msg_with_tool,
+                AIMessage(content="final content", tool_calls=[]),
+            ],
+            "result": "old result",
+        }
+        assert _extract_last_agent_content(state) == "final content"
+
+    def test_extract_last_agent_content_uses_result_if_no_messages(self):
+        state = {
+            "messages": [],
+            "result": "fallback result",
+        }
+        assert _extract_last_agent_content(state) == "fallback result"
+
+    def test_extract_last_agent_content_skips_empty_messages(self):
+        state = {
+            "messages": [
+                AIMessage(content="", tool_calls=[]),
+                AIMessage(content="valid content", tool_calls=[]),
+            ],
+            "result": "",
+        }
+        assert _extract_last_agent_content(state) == "valid content"
