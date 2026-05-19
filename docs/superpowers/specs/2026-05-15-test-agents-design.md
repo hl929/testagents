@@ -29,25 +29,35 @@ date: 2026-05-15
 │  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌───────────┐            │
 │  │ planner  │──→│ dispatch │──→│ reflect  │──→│ synthesize│            │
 │  │ (分解任务) │   │ (路由分派) │   │ (整体反思) │   │ (汇总结果) │            │
-│  └──────────┘   └────┬─────┘   └─────┬────┘   └───────────┘            │
-│       ↑               │               │           │                      │
-│       │     ┌─────────┴─────────┐    │ replan    │                      │
-│       │     ▼                   ▼    └───────────┘                      │
+│  └──────────┘   └────┬─────┘   └─────┬────┘   └─────┬─────┘            │
+│       ↑               │               │               │                   │
+│       │     ┌─────────┴─────────┐    │ replan        │                   │
+│       │     ▼                   ▼    └───────────────┘                   │
 │       │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐         │
 │       │  │code_analyzer │  │case_reviewer │  │save_experience│         │
 │       │  │ (ReAct子图)   │  │ (ReAct子图)   │  │ (经验记录)     │         │
 │       │  └──────┬───────┘  └──────┬───────┘  └───────────────┘         │
 │       │         │                 │                                     │
-│  ─────┼─────────┼─────────────────┼─────────────────────────────────    │
-│       │    Tool 层                 │                                     │
-│       │         ▼                 ▼                                     │
-│       │  ┌──────────────┐  ┌──────────────┐                            │
-│       │  │ ClaudeCliTool│  │ ClaudeCliTool│                            │
-│       │  └──────────────┘  │ TestCasePar- │                            │
-│       │                    │ serTool      │                            │
-│       │                    │ BusinessKn-  │                            │
-│       │                    │ owledgeTool  │                            │
-│       │                    └──────────────┘                            │
+│       │    ┌────┴────────────────┴────┐                                │
+│       │    │        outputs 汇聚        │                                │
+│       │    │  ┌────────────────────┐  │                                │
+│       │    │  │ code_change_report │  │                                │
+│       │    │  │ review_results     │  │                                │
+│       │    │  │ ... (动态扩展)      │  │                                │
+│       │    │  └────────────────────┘  │                                │
+│       │    └──────────────────────────┘                                │
+│       │                     ↑                                           │
+│  ─────┼─────────────────────┼─────────────────────────────────────    │
+│       │    Tool 层          │                                          │
+│       │         ▼           │                                           │
+│       │  ┌──────────────┐  │                                            │
+│       │  │ ClaudeCliTool│  │                                            │
+│       │  └──────────────┘  │  ┌──────────────┐                          │
+│       │                   └──→│ TestCasePar- │                          │
+│       │                      │ serTool      │                          │
+│       │                      │ BusinessKn-  │                          │
+│       │                      │ owledgeTool  │                          │
+│       │                      └──────────────┘                          │
 │       └────────────────────────────────────────────────────────────────│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -110,6 +120,7 @@ class PlanStep(BaseModel):
     agent: str                            # code_analyzer / case_reviewer
     description: str                      # 步骤描述
     input_mapping: dict[str, str]         # agent入参 → state字段引用或常量
+    output_key: str = ""                  # 结果写入 outputs 的 key，空则按 agent 类型默认
 
 
 class ExecutionPlan(BaseModel):
@@ -157,9 +168,8 @@ class SupervisorState(TypedDict):
     confirm_retry_count: int              # 确认重试次数，默认 0
     max_confirm_retries: int              # 最大确认重试次数，默认 3
 
-    # === Agent 产出（步骤间数据传递）===
-    code_change_report: str               # 多模块时自动拼接合并
-    review_results: list[dict]
+    # === 通用结果汇聚（所有 Worker 产出统一写入此处）===
+    outputs: Annotated[dict, operator.or_]  # key → value，Worker 按 output_key 写入
 
     # === 最终输出 ===
     final_answer: Optional[str]
@@ -198,26 +208,28 @@ worker_input = {
     "error": "no",
     "reflection_count": 0,
     "max_reflections": 0,  # 默认不重试
-    "output_key": agent_output_map[plan_step.agent],
+    "output_key": plan_step.output_key or agent_default_output_key(plan_step.agent),
     "result": "",
 }
 ```
 
 **子图 → 主图：**
-子图执行完后，dispatch 从 WorkerState.result 取结果，写入主图 `state[output_key]`。
+子图执行完后，dispatch 从 WorkerState.result 取结果，写入主图 `outputs[output_key]`。
 
 ### 3.4 多模块聚合规则
 
-当有多个 code_analyzer 步骤时，每个步骤产出一份 `code_change_report`。dispatch 节点负责聚合：
-- 多份报告自动拼接，用 `## 模块: {module_name}` 标题分隔
-- 后续 case_reviewer 步骤引用 `${code_change_report}` 时拿到的是合并后的完整报告
+当有多个 code_analyzer 步骤时，每个步骤产出写入 `outputs["code_change_report"]`（或 Planner 指定的其他 key）。dispatch 节点负责聚合：
+- 同 `output_key` 的多份结果自动拼接，用 `## 模块: {module_name}` 标题分隔
+- 不同 `output_key` 的结果隔离存储，互不影响
+- 下游步骤通过 `input_mapping` 引用 `${outputs.code_change_report}` 或 `${outputs.code_change_report_payment}` 读取
 
 ### 3.5 input_mapping 规则
 
 | 形式 | 示例 | 含义 |
 |---|---|---|
 | 字符串常量 | `"payment"` | 直接传给 agent |
-| State 引用 | `"${code_change_report}"` | 从主图 state 中取对应字段的值 |
+| Outputs 引用 | `"${outputs.code_change_report}"` | 从 outputs 字典中取值 |
+| 多 key 拼接 | `"${outputs.report_a}\n${outputs.report_b}"` | 拼接多个 outputs 值传给下游 |
 
 ## 4. 节点设计
 
@@ -424,15 +436,32 @@ ConfirmPlan
 
 ### 4.6 Synthesize 节点（汇总）
 
-**职责：** 汇总所有步骤结果，生成最终输出
+**职责：** 遍历 `outputs` 汇总所有 Worker 结果，生成最终输出
 
 **逻辑：**
 ```
-1. LLM 基于 step_results 综合回答 user_request
-2. 输出 final_answer
+1. 读取 state["outputs"]，按 key 分组整理
+2. 对每个 output_key，提取内容摘要（超长自动截断）
+3. LLM 基于 outputs 内容 + step_results 综合回答 user_request
+4. 输出 final_answer
 ```
 
-**提示词：** `prompts/synthesize.md`
+**Prompt 输入：**
+```python
+output_summaries = []
+for key, value in outputs.items():
+    summary = f"【{key}】\n{str(value)[:3000]}"
+    output_summaries.append(summary)
+
+prompt = load_prompt(
+    "synthesize",
+    user_request=user_request,
+    step_results=json.dumps(step_results, ensure_ascii=False),
+    outputs="\n\n---\n\n".join(output_summaries),
+)
+```
+
+**提示词：** `prompts/synthesize.md`（模板内不再硬编码 `code_change_report`，改为遍历 `outputs` 动态渲染）
 
 ### 4.7 Worker 子图（ReAct + 反思）
 
@@ -672,12 +701,17 @@ if is_simple_request(user_request):
         "result": "",
     }
     result = worker_app.invoke(worker_input)
+    # 直接调用模式下，结果写入统一的 outputs 结构
+    outputs = {"code_change_report": result.get("result", "")}
+    # 最终答案直接取自 outputs
+    final_answer = outputs.get("code_change_report", "")
 else:
     # 走监督者主图
     result = supervisor_app.invoke({
         "user_request": user_request,
         "current_step_index": 0,
         "step_results": [],
+        "outputs": {},
         "needs_replan": False,
         "plan_iterations": 0,
         "max_plan_iterations": 1,
@@ -838,9 +872,80 @@ tools/
 | 用例格式错误 | TestCaseParserTool 返回结构化错误 |
 | 业务知识库未命中 | 返回空字符串继续执行 |
 
+### 3.6 通用 outputs 机制详解
+
+#### 设计动机
+
+随着测试领域 Agent 数量增长（测试计划生成、缺陷分析、覆盖率评估、自动化脚本生成等），固定字段模式会导致 `SupervisorState` 线性膨胀，每新增一个 Agent 需改三处（State + wrapper + synthesize）。`outputs` 机制将结果汇聚从**硬编码**转为**配置驱动**。
+
+#### 核心规则
+
+1. **写入规则**：Worker wrapper 执行完成后，将结果写入 `outputs[step.output_key]`
+2. **聚合规则**：同 `output_key` 的多次写入自动拼接（用分隔符区分来源）
+3. **读取规则**：下游 Worker 通过 `input_mapping` 中的 `${outputs.xxx}` 引用
+
+#### 实现要点
+
+1. `SupervisorState` 中仅保留 `outputs`，移除 `code_change_report`、`review_results` 等固定字段
+2. Worker wrapper 统一写入 `outputs[output_key]`，不再回写旧字段
+3. `input_mapping` 解析器支持 `${outputs.xxx}` 语法，从 `outputs` 字典取值
+4. synthesize 节点遍历 `outputs` 生成汇总报告
+5. 所有测试同步更新，mock state 中使用 `outputs` 替代旧字段
+
+#### 示例：多 Agent 协作的数据流
+
+```
+用户：分析 payment 和 order 模块的代码变更，生成测试计划并评审
+
+Planner 生成 plan：
+  Step 1: code_analyzer (payment) → outputs["report_payment"]
+  Step 2: code_analyzer (order)   → outputs["report_order"]
+  Step 3: test_plan_generator     → outputs["test_plan"]
+       input: "${outputs.report_payment}\n${outputs.report_order}"
+  Step 4: case_reviewer           → outputs["review_results"]
+       input: "${outputs.test_plan}"
+
+Synthesize 遍历 outputs：
+  【report_payment】xxx
+  【report_order】xxx
+  【test_plan】xxx
+  【review_results】xxx
+  → 生成 final_answer
+```
+
 ## 9. 扩展性
 
-- **增加 Worker**：新增 agent 文件 + tools，在 `worker_base.py` 中注册，在 Planner prompt 中补充能力描述，dispatch 路由映射中增加对应关系
+### 9.1 增加 Worker（基于 outputs 机制）
+
+新增 Worker 时，**无需修改 `SupervisorState` 定义**，只需三步：
+
+1. **新增 agent 文件** — 实现 Worker wrapper，指定 `output_key`（如 `test_plan_generator` → `output_key="test_plan"`）
+2. **在 dispatch 路由中注册** — `route_from_dispatch` 增加 agent → node 的映射
+3. **在 Planner prompt 中补充能力描述** — 告知 LLM 新 agent 的能力、入参和 `output_key`
+
+Worker 执行结果自动写入 `outputs[output_key]`，synthesize 节点无需修改即可遍历到新结果。
+
+### 9.2 同类型 Worker 多实例执行
+
+当需要多个 `code_analyzer` 分析不同模块时：
+
+- **聚合模式**（默认）：所有实例共用 `output_key="code_change_report"`，结果自动拼接
+- **隔离模式**：Planner 为每个实例分配不同 `output_key`（如 `code_change_report_payment`、`code_change_report_order`），下游步骤通过 `input_mapping` 按需引用
+
+```json
+{
+  "steps": [
+    {"agent": "code_analyzer", "output_key": "report_payment", "input_mapping": {"module_name": "payment"}},
+    {"agent": "code_analyzer", "output_key": "report_order", "input_mapping": {"module_name": "order"}},
+    {"agent": "case_reviewer", "output_key": "review_results", "input_mapping": {
+      "code_change_report": "${outputs.report_payment}\n${outputs.report_order}"
+    }}
+  ]
+}
+```
+
+### 9.3 其他扩展
+
 - **替换模型**：通过 `config.py` 统一配置
 - **新增 Tool**：在 `tools/` 下新增，在对应 Worker 子图中绑定
 - **经验引用**：后续可扩展 planner 读取 `reflection_experience.md` 辅助规划
@@ -871,7 +976,8 @@ Claude CLI 需单独安装并配置到 PATH 中。
 | 直接调用 | 不支持 | 不支持 | main.py 中直接调 worker_app |
 | 用户确认 | 无 | 有（interrupt） | 有（interrupt） |
 | 参数来源 | 用户直接提供 | Planner 从自然语言提取 | Planner 从自然语言提取 |
-| 步骤间数据传递 | 隐式 | 显式 input_mapping + ${} | 显式 input_mapping + ${} |
+| 步骤间数据传递 | 隐式 | 显式 input_mapping + ${} | 显式 input_mapping + ${outputs.xxx} |
+| 结果汇聚 | 固定字段（硬编码） | 固定字段（硬编码） | 通用 `outputs` 字典（配置驱动） |
 
 ## 12. 反思与经验机制详解
 
