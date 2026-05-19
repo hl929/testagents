@@ -117,15 +117,22 @@ def synthesize_node(state: SupervisorState) -> dict:
     user_request = state.get("user_request", "")
     plan = state.get("plan", {})
     step_results = state.get("step_results", [])
+    outputs = state.get("outputs", {})
 
     plan_summary = json.dumps(plan.get("steps", []), ensure_ascii=False)
     step_results_summary = json.dumps(step_results, ensure_ascii=False)
+
+    output_summaries = []
+    for key, value in outputs.items():
+        summary = f"【{key}】\n{str(value)[:3000]}"
+        output_summaries.append(summary)
 
     prompt = load_prompt(
         "synthesize",
         user_request=user_request,
         plan_summary=plan_summary,
         step_results_summary=step_results_summary,
+        outputs="\n\n---\n\n".join(output_summaries),
     )
 
     response = llm.invoke([HumanMessage(content=prompt)])

@@ -52,6 +52,8 @@ def case_reviewer_wrapper(state: SupervisorState) -> dict:
     test_cases_raw = _resolve_input(input_mapping.get("test_cases", ""), state)
     business_knowledge = _resolve_input(input_mapping.get("business_knowledge", ""), state)
 
+    output_key = step.get("output_key", "") or "review_results"
+
     task_desc = step.get("description", "")
     context_parts = [task_desc]
     if code_change_report:
@@ -67,7 +69,7 @@ def case_reviewer_wrapper(state: SupervisorState) -> dict:
         "error": "no",
         "reflection_count": 0,
         "max_reflections": 0,
-        "output_key": "review_results",
+        "output_key": output_key,
         "result": "",
     }
 
@@ -98,14 +100,17 @@ def case_reviewer_wrapper(state: SupervisorState) -> dict:
     except (json.JSONDecodeError, IndexError):
         review_results = [{"case_id": "N/A", "verdict": "parse_error", "raw": review_text[:500]}]
 
+    outputs = state.get("outputs", {}).copy()
+    outputs[output_key] = review_results
+
     return {
-        "review_results": review_results,
+        "outputs": outputs,
         "current_step_index": current_index + 1,
         "step_results": [{
             "step_id": step.get("step_id", 0),
             "agent": step.get("agent", ""),
             "status": "success" if review_results else "failed",
-            "output_key": "review_results",
+            "output_key": output_key,
             "error": "" if review_results else "Empty result",
         }],
     }

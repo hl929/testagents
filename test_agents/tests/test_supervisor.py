@@ -180,6 +180,24 @@ class TestSynthesizeNode:
             result = synthesize_node(state)
         assert result["final_answer"] == "综合分析报告内容"
 
+    def test_synthesize_reads_from_outputs(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content="基于 outputs 的综合报告")
+        state: SupervisorState = {
+            "user_request": "test",
+            "plan": {"intent": "test", "steps": []},
+            "step_results": [{"step_id": 1, "status": "success"}],
+            "outputs": {"code_change_report": "变更内容", "review_results": [{"verdict": "pass"}]},
+            "messages": [],
+        }
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = synthesize_node(state)
+        assert result["final_answer"] == "基于 outputs 的综合报告"
+        # Verify prompt contains outputs content
+        prompt_arg = mock_llm.invoke.call_args[0][0][0].content
+        assert "【code_change_report】" in prompt_arg
+        assert "变更内容" in prompt_arg
+
 
 class TestSaveExperienceNode:
     def test_save_experience_creates_file(self, tmp_path):

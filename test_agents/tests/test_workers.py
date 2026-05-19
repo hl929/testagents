@@ -101,5 +101,36 @@ class TestCaseReviewerGraph:
         }
         with patch("test_agents.agents.case_reviewer.case_reviewer_graph", mock_graph):
             result = case_reviewer_wrapper(state)
-        assert "review_results" in result
+        assert "outputs" in result
+        assert "review_results" in result["outputs"]
+        assert result["current_step_index"] == 1
+
+    def test_case_reviewer_wrapper_writes_to_outputs(self):
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = {
+            "result": '[{"case_id": "TC001", "verdict": "pass"}]',
+            "messages": [],
+            "error": "no",
+        }
+        state: SupervisorState = {
+            "user_request": "评审用例",
+            "plan": {
+                "intent": "评审测试用例",
+                "steps": [
+                    {"step_id": 2, "agent": "case_reviewer", "description": "评审用例",
+                     "input_mapping": {"code_change_report": "${outputs.code_change_report}"},
+                     "output_key": "review_results"},
+                ],
+                "confirmed": True,
+            },
+            "current_step_index": 0,
+            "outputs": {"code_change_report": "变更报告"},
+            "step_results": [],
+            "messages": [],
+        }
+        with patch("test_agents.agents.case_reviewer.case_reviewer_graph", mock_graph):
+            result = case_reviewer_wrapper(state)
+        assert "outputs" in result
+        assert "review_results" in result["outputs"]
+        assert result["outputs"]["review_results"][0]["case_id"] == "TC001"
         assert result["current_step_index"] == 1
