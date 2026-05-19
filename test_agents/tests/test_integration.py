@@ -165,17 +165,17 @@ def test_full_pipeline_mocked():
 
     # Mock worker responses
     mock_code_analyzer_result = {
-        "code_change_report": "代码变更分析完成",
+        "outputs": {"code_change_report": "代码变更分析完成"},
         "current_step_index": 1,
         "step_results": [
-            {"step_id": 1, "agent": "code_analyzer", "status": "success"}
+            {"step_id": 1, "agent": "code_analyzer", "status": "success", "output_key": "code_change_report"}
         ]
     }
     mock_case_reviewer_result = {
-        "review_results": [{"case_id": "TC001", "verdict": "pass", "score": 90}],
+        "outputs": {"review_results": [{"case_id": "TC001", "verdict": "pass", "score": 90}]},
         "current_step_index": 2,
         "step_results": [
-            {"step_id": 2, "agent": "case_reviewer", "status": "success"}
+            {"step_id": 2, "agent": "case_reviewer", "status": "success", "output_key": "review_results"}
         ]
     }
 
@@ -211,8 +211,9 @@ def test_full_pipeline_mocked():
         result = run_test_agents("测试订单模块")
 
         # Verify pipeline completed
-        assert "code_change_report" in result
-        assert "review_results" in result
+        assert "outputs" in result
+        assert "code_change_report" in result["outputs"]
+        assert "review_results" in result["outputs"]
         assert "final_answer" in result
 
 
@@ -220,10 +221,10 @@ def test_pipeline_with_simple_request():
     """Test simple request handling (direct worker node invocation)"""
     # Mock worker response
     mock_code_analyzer_result = {
-        "code_change_report": "分析完成",
+        "outputs": {"code_change_report": "分析完成"},
         "current_step_index": 1,
         "step_results": [
-            {"step_id": 1, "agent": "code_analyzer", "status": "success"}
+            {"step_id": 1, "agent": "code_analyzer", "status": "success", "output_key": "code_change_report"}
         ]
     }
 
@@ -274,4 +275,5 @@ def test_pipeline_with_simple_request():
         result = run_test_agents("分析代码变更")
 
         # Verify pipeline completed
-        assert "code_change_report" in result
+        assert "outputs" in result
+        assert "code_change_report" in result["outputs"]
