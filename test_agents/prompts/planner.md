@@ -5,7 +5,7 @@
 | Agent | 能力 | 产出字段 | input_mapping key 说明 |
 |---|---|---|---|
 | `code_analyzer` | 分析代码变更 | code_change_report | `module_name`(str): 模块名, `source_commit`(str): 源commit, `target_commit`(str): 目标commit |
-| `case_reviewer` | 评审测试用例 | review_results | `code_change_report`("${code_change_report}"): 引用上游产出, `test_cases`(str): 测试用例, `business_knowledge`(str): 业务知识 |
+| `case_reviewer` | 评审测试用例 | review_results | `code_change_report`("${{outputs.code_change_report}}"): 引用上游产出, `test_cases`(str): 测试用例, `business_knowledge`(str): 业务知识 |
 
 ## 可用工具
 
@@ -24,7 +24,7 @@
 ## input_mapping 规则
 
 1. 常量值直接写字符串，如 `"module_name": "payment"`
-2. 引用上游步骤产出用 `${字段名}` 格式，如 `"code_change_report": "${code_change_report}"`
+2. 引用上游步骤产出用 `${{outputs.key}}` 格式，如 `"code_change_report": "${{outputs.code_change_report}}"`
 3. key 必须严格使用上表列出的名称
 
 ### output_key 规则
