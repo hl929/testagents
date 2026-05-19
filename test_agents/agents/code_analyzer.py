@@ -20,12 +20,20 @@ def build_code_analyzer_graph(llm, llm_with_tools):
 
 
 def _resolve_input(value: str, state: SupervisorState) -> str:
-    """Resolve input_mapping value: ${field} → state field, otherwise constant"""
-    if value.startswith("${") and value.endswith("}"):
-        field_name = value[2:-1]
-        val = state.get(field_name, "")
-        return val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
-    return value
+    """Resolve input_mapping value: ${field} → state field, ${outputs.key} → outputs dict, otherwise constant"""
+    if not (value.startswith("${") and value.endswith("}")):
+        return value
+
+    path = value[2:-1]
+
+    if path.startswith("outputs."):
+        outputs = state.get("outputs", {})
+        key = path[8:]
+        val = outputs.get(key, "")
+    else:
+        val = state.get(path, "")
+
+    return val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
 
 
 def code_analyzer_wrapper(state: SupervisorState) -> dict:
@@ -44,6 +52,8 @@ def code_analyzer_wrapper(state: SupervisorState) -> dict:
     source_commit = _resolve_input(input_mapping.get("source_commit", ""), state)
     target_commit = _resolve_input(input_mapping.get("target_commit", ""), state)
 
+    output_key = step.get("output_key", "") or "code_change_report"
+
     task_desc = step.get("description", "")
     worker_input: WorkerState = {
         "task": task_desc,
@@ -51,7 +61,7 @@ def code_analyzer_wrapper(state: SupervisorState) -> dict:
         "error": "no",
         "reflection_count": 0,
         "max_reflections": 0,
-        "output_key": "code_change_report",
+        "output_key": output_key,
         "result": "",
     }
 
@@ -68,18 +78,20 @@ def code_analyzer_wrapper(state: SupervisorState) -> dict:
                 report = msg.content
                 break
 
-    existing_report = state.get("code_change_report", "")
-    if existing_report and module_name:
-        report = existing_report + f"\n\n## 模块: {module_name}\n" + report
+    outputs = state.get("outputs", {}).copy()
+    existing = outputs.get(output_key, "")
+    if existing and module_name:
+        report = existing + f"\n\n## 模块: {module_name}\n" + report
+    outputs[output_key] = report
 
     return {
-        "code_change_report": report,
+        "outputs": outputs,
         "current_step_index": current_index + 1,
         "step_results": [{
             "step_id": step.get("step_id", 0),
             "agent": step.get("agent", ""),
             "status": "success" if report else "failed",
-            "output_key": "code_change_report",
+            "output_key": output_key,
             "error": "" if report else "Empty result",
         }],
     }

@@ -35,8 +35,38 @@ class TestCodeAnalyzerGraph:
         }
         with patch("test_agents.agents.code_analyzer.code_analyzer_graph", mock_graph):
             result = code_analyzer_wrapper(state)
-        assert "code_change_report" in result
-        assert "变更概述" in result["code_change_report"]
+        assert "outputs" in result
+        assert "code_change_report" in result["outputs"]
+        assert "变更概述" in result["outputs"]["code_change_report"]
+        assert result["current_step_index"] == 1
+
+    def test_code_analyzer_wrapper_writes_to_outputs(self):
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = {
+            "result": "## 变更概述\n新增订单功能",
+            "messages": [],
+            "error": "no",
+        }
+        state: SupervisorState = {
+            "user_request": "分析代码",
+            "plan": {
+                "intent": "分析代码变更",
+                "steps": [
+                    {"step_id": 1, "agent": "code_analyzer", "description": "分析 payment 模块",
+                     "input_mapping": {"module_name": "payment", "source_commit": "abc1234", "target_commit": "def5678"},
+                     "output_key": "code_change_report"},
+                ],
+                "confirmed": True,
+            },
+            "current_step_index": 0,
+            "step_results": [],
+            "messages": [],
+        }
+        with patch("test_agents.agents.code_analyzer.code_analyzer_graph", mock_graph):
+            result = code_analyzer_wrapper(state)
+        assert "outputs" in result
+        assert "code_change_report" in result["outputs"]
+        assert "变更概述" in result["outputs"]["code_change_report"]
         assert result["current_step_index"] == 1
 
 
