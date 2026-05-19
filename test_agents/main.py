@@ -46,8 +46,6 @@ def _build_initial_state(user_request: str) -> dict:
         "plan_iterations": 0,
         "confirm_retry_count": 0,
         "max_confirm_retries": config.MAX_CONFIRM_RETRIES,
-        "code_change_report": "",
-        "review_results": [],
         "final_answer": None,
         "messages": [],
     }

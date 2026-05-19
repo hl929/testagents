@@ -90,12 +90,12 @@ class TestCaseReviewerGraph:
                 "intent": "评审测试用例",
                 "steps": [
                     {"step_id": 2, "agent": "case_reviewer", "description": "评审用例",
-                     "input_mapping": {"code_change_report": "${code_change_report}"}},
+                     "input_mapping": {"code_change_report": "${outputs.code_change_report}"}},
                 ],
                 "confirmed": True,
             },
             "current_step_index": 0,
-            "code_change_report": "变更报告",
+            "outputs": {"code_change_report": "变更报告"},
             "step_results": [],
             "messages": [],
         }

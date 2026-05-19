@@ -70,8 +70,6 @@ class SupervisorState(TypedDict, total=False):
     confirm_retry_count: int
     max_confirm_retries: int
     outputs: Annotated[dict, operator.or_]
-    code_change_report: str
-    review_results: list[dict]
     final_answer: Optional[str]
     messages: Annotated[list[AnyMessage], add_messages]
 
