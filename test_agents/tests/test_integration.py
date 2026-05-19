@@ -217,63 +217,32 @@ def test_full_pipeline_mocked():
         assert "final_answer" in result
 
 
-def test_pipeline_with_simple_request():
-    """Test simple request handling (direct worker node invocation)"""
-    # Mock worker response
-    mock_code_analyzer_result = {
-        "outputs": {"code_change_report": "分析完成"},
-        "current_step_index": 1,
-        "step_results": [
-            {"step_id": 1, "agent": "code_analyzer", "status": "success", "output_key": "code_change_report"}
-        ]
+
+
+def test_direct_worker_invocation_code_analyzer():
+    """Test direct worker invocation for code analyzer simple request"""
+    mock_graph = MagicMock()
+    mock_graph.invoke.return_value = {
+        "result": "## 变更概述\n新增订单功能",
+        "messages": [],
+        "error": "no",
     }
+    with patch("test_agents.main.WORKER_REGISTRY", {"code_analyzer": mock_graph}):
+        result = run_test_agents("分析订单模块代码变更")
+    assert result["outputs"]["code_change_report"] == "## 变更概述\n新增订单功能"
+    assert result["final_answer"] == "## 变更概述\n新增订单功能"
+    assert result["step_results"][0]["agent"] == "code_analyzer"
 
-    # Mock planner LLM response
-    mock_planner_response = MagicMock()
-    mock_planner_response.invoke.return_value = {
-        "intent": "分析代码变更",
-        "steps": [
-            {"agent": "code_analyzer", "step_id": 1, "description": "分析订单模块代码变更"}
-        ]
+
+def test_direct_worker_invocation_case_reviewer():
+    """Test direct worker invocation for case reviewer simple request"""
+    mock_graph = MagicMock()
+    mock_graph.invoke.return_value = {
+        "result": '[{"case_id": "TC001", "verdict": "pass"}]',
+        "messages": [],
+        "error": "no",
     }
-
-    # Mock reflect LLM response
-    mock_reflect_response = MagicMock()
-    mock_reflect_response.content = '{"assessment": "COMPLETE", "feedback": "Analysis done"}'
-
-    # Mock synthesize LLM response
-    mock_synthesize_response = MagicMock()
-    mock_synthesize_response.content = "分析完成"
-
-    with patch("test_agents.agents.supervisor.get_llm") as mock_supervisor_llm, \
-         patch("test_agents.graph.builder.get_llm") as mock_builder_llm, \
-         patch("test_agents.agents.supervisor.interrupt") as mock_interrupt, \
-         patch("test_agents.graph.builder.code_analyzer_wrapper") as mock_code_analyzer_wrapper:
-
-        # Configure supervisor LLM mocks
-        mock_llm_instance = MagicMock()
-        mock_supervisor_llm.return_value = mock_llm_instance
-        mock_builder_llm.return_value = mock_llm_instance
-
-        # Configure LLM for planning (with structured output)
-        mock_llm_instance.with_structured_output.return_value = mock_planner_response
-
-        # Configure LLM for reflection and synthesis (without structured output)
-        mock_llm_instance.invoke.side_effect = [mock_reflect_response, mock_synthesize_response]
-
-        # Mock LLM with tools binding (used for workers)
-        mock_llm_with_tools = MagicMock()
-        mock_llm_instance.bind_tools.return_value = mock_llm_with_tools
-
-        # Configure interrupt to skip user confirmation
-        mock_interrupt.return_value = {"confirmed": True}
-
-        # Configure worker wrapper
-        mock_code_analyzer_wrapper.return_value = mock_code_analyzer_result
-
-        # Run simple request
-        result = run_test_agents("分析代码变更")
-
-        # Verify pipeline completed
-        assert "outputs" in result
-        assert "code_change_report" in result["outputs"]
+    with patch("test_agents.main.WORKER_REGISTRY", {"case_reviewer": mock_graph}):
+        result = run_test_agents("评审测试用例")
+    assert result["outputs"]["review_results"] == '[{"case_id": "TC001", "verdict": "pass"}]'
+    assert result["step_results"][0]["agent"] == "case_reviewer"

@@ -23,6 +23,7 @@ from test_agents.agents.case_reviewer import (
     build_case_reviewer_graph,
     case_reviewer_wrapper,
 )
+from test_agents.agents.worker_base import WORKER_REGISTRY
 from test_agents.graph.state import SupervisorState
 
 
@@ -36,8 +37,10 @@ def build_graph():
     llm_with_ca_tools = llm.bind_tools(code_analyzer_tools)
     llm_with_cr_tools = llm.bind_tools(case_reviewer_tools)
 
-    build_code_analyzer_graph(llm, llm_with_ca_tools)
-    build_case_reviewer_graph(llm, llm_with_cr_tools)
+    code_analyzer_graph = build_code_analyzer_graph(llm, llm_with_ca_tools)
+    case_reviewer_graph = build_case_reviewer_graph(llm, llm_with_cr_tools)
+    WORKER_REGISTRY["code_analyzer"] = code_analyzer_graph
+    WORKER_REGISTRY["case_reviewer"] = case_reviewer_graph
 
     graph = StateGraph(SupervisorState)
 

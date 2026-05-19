@@ -4,6 +4,9 @@ import json
 import re
 from typing import Literal
 
+WORKER_REGISTRY: dict[str, any] = {}
+"""Maps agent name → compiled worker graph (populated by builder)."""
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, tools_condition

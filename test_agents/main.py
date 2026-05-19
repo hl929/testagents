@@ -5,9 +5,12 @@ import json
 import sys
 
 from langgraph.types import Command
+from langchain_core.messages import HumanMessage
 
 from test_agents.config import config
 from test_agents.graph.builder import build_graph
+from test_agents.agents.worker_base import WORKER_REGISTRY
+from test_agents.graph.state import WorkerState
 
 
 _SINGLE_AGENT_KEYWORDS = {
@@ -52,19 +55,55 @@ def _build_initial_state(user_request: str) -> dict:
 
 
 def run_test_agents(user_request: str) -> dict:
-    """运行测试智能体群"""
+    """运行测试智能体群（简单请求直接走 Worker，复杂请求走 Supervisor）"""
+    simple_agent = is_simple_request(user_request)
+    if simple_agent:
+        return _run_direct_worker(user_request, simple_agent)
+    return _run_supervisor(user_request)
+
+
+def _run_direct_worker(user_request: str, agent_name: str) -> dict:
+    """直接调用 Worker 子图，跳过 planner/confirm/reflect/synthesize。"""
+    worker_graph = WORKER_REGISTRY.get(agent_name)
+    if worker_graph is None:
+        raise RuntimeError(f"Worker graph for {agent_name} not found in registry")
+    worker_input: WorkerState = {
+        "task": user_request,
+        "messages": [HumanMessage(content=user_request)],
+        "error": "no",
+        "reflection_count": 0,
+        "max_reflections": 0,
+        "output_key": "result",
+        "result": "",
+    }
+    result = worker_graph.invoke(worker_input)
+    output_text = result.get("result", "")
+    if not output_text:
+        for msg in reversed(result.get("messages", [])):
+            if hasattr(msg, "content") and msg.content and not getattr(msg, "tool_calls", None):
+                output_text = msg.content
+                break
+    output_key = "code_change_report" if agent_name == "code_analyzer" else "review_results"
+    return {
+        "user_request": user_request,
+        "outputs": {output_key: output_text},
+        "final_answer": output_text,
+        "step_results": [
+            {"step_id": 1, "agent": agent_name, "status": "success", "output_key": output_key}
+        ],
+    }
+
+
+def _run_supervisor(user_request: str) -> dict:
+    """走完整的 Supervisor 主图。"""
     app = build_graph()
     thread_config = {"configurable": {"thread_id": "test-agents-session"}}
     initial_state = _build_initial_state(user_request)
-
     result = app.invoke(initial_state, thread_config)
-
-    # Handle interrupts (confirm_plan)
     while True:
         state = app.get_state(thread_config)
         if not state.next:
             break
-        # Graph is paused at confirm_plan
         plan = state.values.get("plan", {})
         _display_plan(plan)
         confirmed = input("\n确认计划？(y/n): ").lower().strip()
@@ -73,8 +112,6 @@ def run_test_agents(user_request: str) -> dict:
         else:
             feedback = input("请输入修改建议: ")
             app.invoke(Command(resume={"confirmed": False, "feedback": feedback}), thread_config)
-
-    # Get final state
     final_state = app.get_state(thread_config)
     return final_state.values
 
