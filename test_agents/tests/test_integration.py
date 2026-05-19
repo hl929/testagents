@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 from langchain_core.messages import AIMessage
 from test_agents.main import run_test_agents
 from test_agents.agents.supervisor import route_from_confirm, route_from_dispatch, route_from_reflect
-from test_agents.agents.case_reviewer import _resolve_input
+from test_agents.agents.worker_base import _resolve_input
 
 
 def test_route_from_confirm():

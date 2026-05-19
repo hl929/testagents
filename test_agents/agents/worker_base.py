@@ -1,14 +1,33 @@
 """Worker subgraph factory - ReAct + Reflection pattern"""
 
 import json
+import re
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from test_agents.graph.state import WorkerState
+from test_agents.graph.state import WorkerState, SupervisorState
 from test_agents.prompts.loader import load_prompt
+
+
+def _resolve_input(value: str, state: SupervisorState) -> str:
+    """Resolve input_mapping value: ${field} → state field, ${outputs.key} → outputs dict, with multi-key interpolation support"""
+
+    def replace_placeholder(match):
+        path = match.group(1)
+
+        if path.startswith("outputs."):
+            outputs = state.get("outputs", {})
+            key = path[8:]
+            val = outputs.get(key, "")
+        else:
+            val = state.get(path, "")
+
+        return val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
+
+    return re.sub(r'\$\{([^}]+)\}', replace_placeholder, value)
 
 
 def agent_node(state: WorkerState, llm_with_tools) -> dict:
@@ -37,7 +56,13 @@ def worker_reflect(state: WorkerState, llm) -> dict:
                 break
 
     task = state.get("task", "")
-    prompt = load_prompt("worker_reflect", task=task, result=result[:2000])
+    prompt = load_prompt(
+        "worker_reflect",
+        task=task,
+        result=result[:2000],
+        reflection_count=reflection_count,
+        max_reflections=max_reflections,
+    )
     response = llm.invoke([HumanMessage(content=prompt)])
 
     try:

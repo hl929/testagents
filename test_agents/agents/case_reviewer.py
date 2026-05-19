@@ -3,7 +3,7 @@
 import json
 from langchain_core.messages import HumanMessage
 
-from test_agents.agents.worker_base import build_worker_graph
+from test_agents.agents.worker_base import build_worker_graph, _resolve_input
 from test_agents.graph.state import SupervisorState, WorkerState
 from test_agents.tools.base import ToolRegistry
 
@@ -19,21 +19,6 @@ def build_case_reviewer_graph(llm, llm_with_tools):
     return case_reviewer_graph
 
 
-def _resolve_input(value: str, state: SupervisorState) -> str:
-    """Resolve input_mapping value: ${field} → state field, ${outputs.key} → outputs dict, otherwise constant"""
-    if not (value.startswith("${") and value.endswith("}")):
-        return value
-
-    path = value[2:-1]  # e.g., "code_change_report" or "outputs.code_change_report"
-
-    if path.startswith("outputs."):
-        outputs = state.get("outputs", {})
-        key = path[8:]  # Remove "outputs." prefix
-        val = outputs.get(key, "")
-    else:
-        val = state.get(path, "")
-
-    return val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
 
 
 def case_reviewer_wrapper(state: SupervisorState) -> dict:
