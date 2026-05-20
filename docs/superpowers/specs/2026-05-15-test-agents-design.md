@@ -17,44 +17,59 @@
 
 ### 2.1 模式选型
 
-采用 **Plan-and-Solve + Reflection** 分层架构：
+采用 **Intent Classification + Plan-and-Solve + Reflection** 分层架构：
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                          Supervisor 主图                                  │
 │                                                                           │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌───────────┐            │
-│  │ planner  │──→│ dispatch │──→│ reflect  │──→│ synthesize│            │
-│  │ (分解任务) │   │ (路由分派) │   │ (整体反思) │   │ (汇总结果) │            │
-│  └──────────┘   └────┬─────┘   └─────┬────┘   └─────┬─────┘            │
-│       ↑               │               │               │                   │
-│       │     ┌─────────┴─────────┐    │ replan        │                   │
-│       │     ▼                   ▼    └───────────────┘                   │
-│       │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐         │
-│       │  │code_analyzer │  │case_reviewer │  │save_experience│         │
-│       │  │ (ReAct子图)   │  │ (ReAct子图)   │  │ (经验记录)     │         │
-│       │  └──────┬───────┘  └──────┬───────┘  └───────────────┘         │
-│       │         │                 │                                     │
-│       │    ┌────┴────────────────┴────┐                                │
-│       │    │        outputs 汇聚        │                                │
-│       │    │  ┌────────────────────┐  │                                │
-│       │    │  │ code_change_report │  │                                │
-│       │    │  │ review_results     │  │                                │
-│       │    │  │ ... (动态扩展)      │  │                                │
-│       │    │  └────────────────────┘  │                                │
-│       │    └──────────────────────────┘                                │
-│       │                     ↑                                           │
-│  ─────┼─────────────────────┼─────────────────────────────────────    │
-│       │    Tool 层          │                                          │
-│       │         ▼           │                                           │
-│       │  ┌──────────────┐  │                                            │
-│       │  │ ClaudeCliTool│  │                                            │
-│       │  └──────────────┘  │  ┌──────────────┐                          │
-│       │                   └──→│ TestCasePar- │                          │
-│       │                      │ serTool      │                          │
-│       │                      │ BusinessKn-  │                          │
-│       │                      │ owledgeTool  │                          │
-│       │                      └──────────────┘                          │
+│  ┌──────────────────┐   ┌──────────┐   ┌──────────┐   ┌───────────┐    │
+│  │intent_classifier │──→│ planner  │──→│ dispatch │──→│ reflect   │    │
+│  │ (意图分类)        │   │ (分解任务) │   │ (路由分派) │   │ (整体反思) │    │
+│  └────────┬─────────┘   └──────────┘   └────┬─────┘   └─────┬────┘    │
+│           │ irrelevant / ambiguous          │               │          │
+│           ▼                                 │               │          │
+│      ┌──────────┐                           │               │          │
+│      │  reply   │                           │               │          │
+│      │ (友好回复) │                           │               │          │
+│      └────┬─────┘                           │               │          │
+│           │                                 │               │          │
+│           ▼                                 ▼               ▼          │
+│          END                         ┌───────────┐   ┌───────────┐    │
+│                                      │ synthesize│   │save_exper-│    │
+│                                      │ (汇总结果) │   │ ience     │    │
+│                                      └─────┬─────┘   └─────┬─────┘    │
+│                                            │               │          │
+│                                            ▼               ▼          │
+│                                           END             END          │
+│       ↑                                    │                          │
+│       │     ┌─────────┴─────────┐         │                           │
+│       │     ▼                   ▼         │                           │
+│       │  ┌──────────────┐  ┌──────────────┐                          │
+│       │  │code_analyzer │  │case_reviewer │                          │
+│       │  │ (ReAct子图)   │  │ (ReAct子图)   │                          │
+│       │  └──────┬───────┘  └──────┬───────┘                          │
+│       │         │                 │                                   │
+│       │    ┌────┴────────────────┴────┐                              │
+│       │    │        outputs 汇聚        │                              │
+│       │    │  ┌────────────────────┐  │                              │
+│       │    │  │ code_change_report │  │                              │
+│       │    │  │ review_results     │  │                              │
+│       │    │  │ ... (动态扩展)      │  │                              │
+│       │    │  └────────────────────┘  │                              │
+│       │    └──────────────────────────┘                              │
+│       │                     ↑                                         │
+│  ─────┼─────────────────────┼─────────────────────────────────────   │
+│       │    Tool 层          │                                         │
+│       │         ▼           │                                          │
+│       │  ┌──────────────┐  │                                           │
+│       │  │ ClaudeCliTool│  │                                           │
+│       │  └──────────────┘  │  ┌──────────────┐                         │
+│       │                   └──→│ TestCasePar- │                         │
+│       │                      │ serTool      │                         │
+│       │                      │ BusinessKn-  │                         │
+│       │                      │ owledgeTool  │                         │
+│       │                      └──────────────┘                         │
 │       └────────────────────────────────────────────────────────────────│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -92,6 +107,8 @@ test_agents/
 │   ├── code_analysis_skill/
 │   └── case_review_skill/
 ├── prompts/                     # 提示词模板
+│   ├── intent_classifier.md     # 意图分类提示词
+│   ├── reply.md                 # 无关/模糊请求回复提示词
 │   ├── supervisor.md            # 监督者各阶段提示词（planner / reflect / synthesize）
 │   ├── worker_reflect.md        # Worker 反思提示词（新增）
 │   ├── code_analyzer.md
@@ -171,6 +188,10 @@ class SupervisorState(TypedDict):
     # === 最终输出 ===
     final_answer: Optional[str]
 
+    # === 意图分类 ===
+    intent_classification: str              # "relevant" / "ambiguous" / "irrelevant"
+    intent_reason: str                      # 分类理由
+
     # === 消息历史 ===
     messages: Annotated[list[AnyMessage], add_messages]
 ```
@@ -232,12 +253,60 @@ worker_input = {
 
 ## 4. 节点设计
 
-### 4.1 Planner 节点
+### 4.1 Intent Classifier 节点
+
+**职责：** 在正式进入规划流程前，判断用户请求是否与系统能力相关。
+
+**输入：** `state["user_request"]`
+**输出：** `{"intent_classification": "relevant", "intent_reason": "..."}`
+
+**三分类规则：**
+
+| 分类 | 含义 | 示例 |
+|---|---|---|
+| `relevant` | 明确涉及代码分析或测试用例评审 | "分析 payment 模块代码变更" |
+| `ambiguous` | 提到相关关键词但不明确具体需求 | "帮我看看测试" |
+| `irrelevant` | 完全无关 | "hello"、"今天天气怎样" |
+
+**实现逻辑：**
+1. 使用 `load_prompt("intent_classifier", user_request=user_request)` 生成 prompt
+2. 调用 LLM，期望返回 JSON：`{"classification": "relevant", "reason": "..."}`
+3. 解析失败时默认 `classification = "ambiguous"`，reason 为解析错误提示
+
+**降级策略：**
+
+| 场景 | 行为 |
+|---|---|
+| LLM 返回非 JSON | 默认 `classification = "ambiguous"` |
+| JSON 缺少 `classification` 字段 | 同上 |
+| LLM 调用失败（网络/超时） | 捕获异常，默认 `classification = "ambiguous"`，不中断流程 |
+
+**提示词：** `prompts/intent_classifier.md`
+
+### 4.2 Reply 节点
+
+**职责：** 对无关或模糊请求生成友好回复，直接结束流程。
+
+**输入：** `state["user_request"]`, `state["intent_classification"]`, `state["intent_reason"]`
+**输出：** `{"final_answer": "..."}`
+
+**实现逻辑：**
+1. 使用 `load_prompt("reply", user_request=..., classification=..., reason=...)` 生成 prompt
+2. 调用 LLM 生成一段自然、友好的回复
+3. 回复写入 `final_answer`
+
+**回复策略：**
+- `irrelevant`：礼貌说明系统能力范围，举例可用请求格式
+- `ambiguous`：说明理解到用户可能有相关需求，但信息不足，请补充具体模块名 / commit / 用例
+
+**提示词：** `prompts/reply.md`
+
+### 4.3 Planner 节点
 
 **职责：**
 
 1. 解析 `user_request`，理解用户意图
-2. 提取参数（targets 列表、test\_cases、business\_knowledge 等）
+2. 提取参数（targets 列表、test_cases、business_knowledge 等）
 3. 生成 `ExecutionPlan`，包含有序步骤列表
 
 **输出：** 更新 state 的 `plan`、`targets`、`test_cases`、`business_knowledge`
@@ -394,7 +463,7 @@ ConfirmPlan
 
 **提示词：** `prompts/dispatch.md`
 
-### 4.4 Reflect 节点（监督者反思）
+### 4.5 Reflect 节点（监督者反思）
 
 **职责：** 全部步骤执行完后，LLM 评估整体结果是否完整正确
 
@@ -413,7 +482,7 @@ ConfirmPlan
 
 **提示词：** `prompts/supervisor_reflect.md`
 
-### 4.5 SaveExperience 节点（经验记录）
+### 4.7 SaveExperience 节点（经验记录）
 
 **职责：** 将规划与执行经验写入持久化文档
 
@@ -446,7 +515,7 @@ ConfirmPlan
 
 **当前阶段：** 只记录经验，不在规划时引用。后续可扩展为 planner 读取经验辅助规划。
 
-### 4.6 Synthesize 节点（汇总）
+### 4.8 Synthesize 节点（汇总）
 
 **职责：** 遍历 `outputs` 汇总所有 Worker 结果，生成最终输出
 
@@ -477,7 +546,7 @@ prompt = load_prompt(
 
 **提示词：** `prompts/synthesize.md`（模板内不再硬编码 `code_change_report`，改为遍历 `outputs` 动态渲染）
 
-### 4.7 Worker 子图（ReAct + 反思）
+### 4.9 Worker 子图（ReAct + 反思）
 
 每个 Worker（code\_analyzer / case\_reviewer）是独立的 ReAct + Reflection 子图，作为主图节点注册。
 
@@ -560,6 +629,8 @@ supervisor_graph.add_node("case_reviewer", case_reviewer_graph)
 graph = StateGraph(SupervisorState)
 
 # 添加节点
+graph.add_node("intent_classifier", intent_classifier_node)
+graph.add_node("reply", reply_node)
 graph.add_node("planner", planner_node)
 graph.add_node("confirm_plan", confirm_plan_node)
 graph.add_node("dispatch", dispatch_node)
@@ -570,20 +641,30 @@ graph.add_node("synthesize", synthesize_node)
 graph.add_node("save_experience", save_experience_node)
 
 # 固定边
-graph.add_edge(START, "planner")
 graph.add_edge("code_analyzer", "dispatch")                # Worker 完成后回 dispatch
 graph.add_edge("case_reviewer", "dispatch")                # Worker 完成后回 dispatch
 graph.add_edge("synthesize", "save_experience")
 graph.add_edge("save_experience", END)
+graph.add_edge("reply", END)                               # 无关/模糊请求直接结束
 
-# 条件边 1：planner 后路由（首次→confirm_plan，重新规划→confirm_plan）
+# 条件边 1：intent_classifier 后路由
+graph.add_conditional_edges(
+    "intent_classifier",
+    route_from_classifier,
+    {
+        "planner": "planner",
+        "reply": "reply"
+    }
+)
+
+# 条件边 2：planner 后路由（首次→confirm_plan，重新规划→confirm_plan）
 graph.add_conditional_edges(
     "planner",
     lambda state: "confirm_plan",
     {"confirm_plan": "confirm_plan"}
 )
 
-# 条件边 2：confirm_plan 后路由（确认→dispatch，拒绝未超限→planner，拒绝超限→END）
+# 条件边 3：confirm_plan 后路由（确认→dispatch，拒绝未超限→planner，拒绝超限→END）
 graph.add_conditional_edges(
     "confirm_plan",
     route_from_confirm,
@@ -594,7 +675,7 @@ graph.add_conditional_edges(
     }
 )
 
-# 条件边 3：dispatch 路由到 Worker 或 reflect
+# 条件边 4：dispatch 路由到 Worker 或 reflect
 graph.add_conditional_edges(
     "dispatch",
     route_from_dispatch,
@@ -605,7 +686,7 @@ graph.add_conditional_edges(
     }
 )
 
-# 条件边 4：reflect 后路由（replan / synthesize）
+# 条件边 5：reflect 后路由（replan / synthesize）
 graph.add_conditional_edges(
     "reflect",
     route_from_reflect,
@@ -619,6 +700,14 @@ graph.add_conditional_edges(
 ### 5.2 条件路由函数
 
 ```python
+def route_from_classifier(state: SupervisorState) -> Literal["planner", "reply"]:
+    """intent_classifier 后路由：相关→planner，无关/模糊→reply"""
+    classification = state.get("intent_classification", "")
+    if classification == "relevant":
+        return "planner"
+    return "reply"
+
+
 def route_from_confirm(state: SupervisorState) -> Literal["dispatch", "planner", "end"]:
     """confirm_plan 后路由：确认→dispatch，拒绝→planner（重试），超限→end"""
     if state.get("plan") and state["plan"].confirmed:
@@ -648,7 +737,13 @@ def route_from_reflect(state: SupervisorState) -> Literal["planner", "synthesize
 ```
 用户输入 user_request（自然语言）
     ↓
-START → Planner
+START → IntentClassifier
+    ├─ 判断请求是否与系统能力相关
+    ├─ relevant    → 进入 Planner
+    ├─ ambiguous   → Reply（引导用户补充信息）→ END
+    └─ irrelevant  → Reply（说明系统能力范围）→ END
+    ↓
+Planner
     ├─ 解析 user_request
     ├─ 提取参数
     └─ 生成 ExecutionPlan
@@ -880,6 +975,8 @@ tools/
 
 | 场景             | 处理方式                                                 |
 | -------------- | ---------------------------------------------------- |
+| Intent Classifier 返回非 JSON | 默认 `classification = "ambiguous"`，reply_node 生成引导消息 |
+| Intent Classifier LLM 调用失败 | 捕获异常，默认 `classification = "ambiguous"`，不中断流程 |
 | Planner 无法理解意图 | `plan` 为 None，返回错误提示要求用户补充说明                         |
 | Planner 输出格式异常 | 重试一次，仍失败则 error 终止                                   |
 | 用户拒绝计划         | 返回修改意图或终止                                            |
