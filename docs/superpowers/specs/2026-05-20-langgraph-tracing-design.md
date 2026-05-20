@@ -27,7 +27,24 @@ pip install -U "psycopg[binary,pool]" langgraph-checkpoint-postgres langsmith
 
 | 工具 | 用途 | 安装方式 |
 |---|---|---|
-| PostgreSQL 14+ | Checkpoint + Store 数据库 | `docker run -d --name langgraph-pg -p 5432:5432 -e POSTGRES_DB=langgraph postgres:16` |
+| PostgreSQL 14+ | Checkpoint + Store 数据库 | 见下方安装选项 |
+| Docker Desktop | 运行 PostgreSQL 容器（可选） | [Docker Desktop WSL2 集成](https://docs.docker.com/go/wsl2/)；当前环境未安装，需先配置 |
+
+**PostgreSQL 安装选项（任选其一）：**
+
+1. **Docker（推荐）**：安装 Docker Desktop 并启用 WSL2 集成后：
+   ```bash
+   docker run -d --name langgraph-pg -p 5432:5432 -e POSTGRES_DB=langgraph postgres:16
+   ```
+
+2. **WSL2 直接安装**：无需 Docker：
+   ```bash
+   sudo apt update && sudo apt install -y postgresql-16
+   sudo service postgresql start
+   sudo -u postgres createdb langgraph
+   ```
+
+3. **远程 PostgreSQL**：使用已有的远程实例，配置 `LANGGRAPH_DB_URI` 指向远程地址即可
 
 ### requirements.txt 新增
 

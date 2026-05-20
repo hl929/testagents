@@ -252,6 +252,15 @@ class TestIntentClassifierNode:
         assert result["intent_classification"] == "relevant"
         assert result["intent_reason"] == "明确需求"
 
+    def test_classifies_relevant_with_markdown_fenced_json(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content='```json\n{"classification": "relevant", "reason": "明确需求"}\n```')
+        state: SupervisorState = {"user_request": "分析代码", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "relevant"
+        assert result["intent_reason"] == "明确需求"
+
     def test_classifies_irrelevant(self):
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = MagicMock(content='{"classification": "irrelevant", "reason": "打招呼"}')
@@ -277,6 +286,16 @@ class TestIntentClassifierNode:
         with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
             result = intent_classifier_node(state)
         assert result["intent_classification"] == "ambiguous"
+        assert "解析失败" in result["intent_reason"]
+
+    def test_classifier_prompt_contains_user_request(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content='{"classification": "relevant", "reason": "test"}')
+        state: SupervisorState = {"user_request": "分析 payment 模块", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            intent_classifier_node(state)
+        prompt_arg = mock_llm.invoke.call_args[0][0][0].content
+        assert "分析 payment 模块" in prompt_arg
 
 
 class TestReplyNode:
@@ -318,3 +337,18 @@ class TestReplyNode:
         with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
             result = reply_node(state)
         assert "请补充" in result["final_answer"]
+
+    def test_reply_prompt_contains_classification(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content="回复内容")
+        state: SupervisorState = {
+            "user_request": "hello",
+            "intent_classification": "irrelevant",
+            "intent_reason": "打招呼",
+            "messages": [],
+        }
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            reply_node(state)
+        prompt_arg = mock_llm.invoke.call_args[0][0][0].content
+        assert "irrelevant" in prompt_arg
+        assert "打招呼" in prompt_arg
