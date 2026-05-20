@@ -137,3 +137,21 @@ Prompt 模板存放在 `test_agents/prompts/*.md`，通过 `test_agents/prompts/
 - 测试大量使用 `unittest.mock.patch` 来 Mock LLM、Worker 子图和 `interrupt`
 - `test_integration.py` 包含完整的 pipeline Mock 测试，是理解数据流的最佳参考
 - Worker 子图在 `build_graph()` 时初始化并缓存到全局变量（`code_analyzer_graph` / `case_reviewer_graph`），测试时通常直接 patch wrapper 函数
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
