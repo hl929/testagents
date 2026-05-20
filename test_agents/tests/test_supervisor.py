@@ -100,6 +100,24 @@ class TestRouteFromReflect:
         assert route_from_reflect(state) == "synthesize"
 
 
+class TestRouteFromClassifier:
+    def test_relevant_goes_planner(self):
+        state: SupervisorState = {"intent_classification": "relevant"}
+        assert route_from_classifier(state) == "planner"
+
+    def test_ambiguous_goes_reply(self):
+        state: SupervisorState = {"intent_classification": "ambiguous"}
+        assert route_from_classifier(state) == "reply"
+
+    def test_irrelevant_goes_reply(self):
+        state: SupervisorState = {"intent_classification": "irrelevant"}
+        assert route_from_classifier(state) == "reply"
+
+    def test_empty_defaults_to_reply(self):
+        state: SupervisorState = {"intent_classification": ""}
+        assert route_from_classifier(state) == "reply"
+
+
 class TestPlannerNode:
     def test_planner_generates_plan(self):
         mock_llm = MagicMock()
