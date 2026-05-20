@@ -23,6 +23,72 @@ def get_llm():
     return ChatOpenAI(**kwargs)
 
 
+def _strip_markdown_json(text: str) -> str:
+    """剥离 LLM 返回的 markdown 代码围栏"""
+    if "```json" in text:
+        return text.split("```json")[1].split("```")[0].strip()
+    if "```" in text:
+        return text.split("```")[1].split("```")[0].strip()
+    return text.strip()
+
+
+def intent_classifier_node(state: SupervisorState) -> dict:
+    """Classify user request intent before entering planner."""
+    llm = get_llm()
+    user_request = state.get("user_request", "")
+    prompt = load_prompt("intent_classifier", user_request=user_request)
+
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        content = _strip_markdown_json(response.content)
+        assessment = json.loads(content)
+        classification = assessment.get("classification", "ambiguous")
+        reason = assessment.get("reason", "")
+        if classification not in ("relevant", "ambiguous", "irrelevant"):
+            classification = "ambiguous"
+    except (json.JSONDecodeError, Exception):
+        classification = "ambiguous"
+        reason = "意图分类解析失败，默认按模糊请求处理"
+
+    return {
+        "intent_classification": classification,
+        "intent_reason": reason,
+    }
+
+
+def reply_node(state: SupervisorState) -> dict:
+    """Generate friendly reply for irrelevant or ambiguous requests."""
+    llm = get_llm()
+    user_request = state.get("user_request", "")
+    classification = state.get("intent_classification", "ambiguous")
+    reason = state.get("intent_reason", "")
+
+    prompt = load_prompt(
+        "reply",
+        user_request=user_request,
+        classification=classification,
+        reason=reason,
+    )
+
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return {"final_answer": response.content}
+    except Exception:
+        # 降级到硬编码回复模板，确保流程不中断
+        if classification == "irrelevant":
+            fallback = (
+                "您好！我是 Test Agents，专门用于分析代码变更和评审测试用例。"
+                "如果您有代码分析需求，请告诉我模块名和 commit 范围。"
+            )
+        else:
+            fallback = (
+                "好的，我可以帮您评审测试用例。请补充以下信息："
+                "1）需要分析的模块名称；2）代码变更的 commit 范围（如有）；"
+                "3）需要评审的具体测试用例内容。"
+            )
+        return {"final_answer": fallback}
+
+
 def planner_node(state: SupervisorState) -> dict:
     """Parse user_request and generate ExecutionPlan"""
     llm = get_llm()
@@ -30,15 +96,18 @@ def planner_node(state: SupervisorState) -> dict:
     tools_info = ToolRegistry.render_all()
     prompt = load_prompt("planner", user_request=user_request, tools_info=tools_info)
 
-    structured_llm = llm.with_structured_output(ExecutionPlan)
-    plan = structured_llm.invoke([HumanMessage(content=prompt)])
+    response = llm.invoke([HumanMessage(content=prompt)])
+    content = _strip_markdown_json(response.content)
 
-    if isinstance(plan, ExecutionPlan):
+    try:
+        plan = ExecutionPlan.model_validate_json(content)
         plan_dict = plan.model_dump()
-    elif isinstance(plan, dict):
-        plan_dict = plan
-    else:
-        plan_dict = {"intent": "解析失败", "steps": [], "confirmed": False}
+    except Exception:
+        try:
+            plan = ExecutionPlan.model_validate(json.loads(content))
+            plan_dict = plan.model_dump()
+        except Exception:
+            plan_dict = {"intent": "解析失败", "steps": [], "confirmed": False}
 
     return {
         "plan": plan_dict,
@@ -102,11 +171,7 @@ def reflect_node(state: SupervisorState) -> dict:
     response = llm.invoke([HumanMessage(content=prompt)])
 
     try:
-        content = response.content
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
+        content = _strip_markdown_json(response.content)
         assessment = json.loads(content)
 
         if assessment.get("assessment") == "REPLAN":
@@ -242,3 +307,11 @@ def route_from_reflect(state: SupervisorState) -> Literal["planner", "synthesize
     if state.get("needs_replan") and state.get("plan_iterations", 0) < state.get("max_plan_iterations", 1):
         return "planner"
     return "synthesize"
+
+
+def route_from_classifier(state: SupervisorState) -> Literal["planner", "reply"]:
+    """Route after intent_classifier: relevant→planner, other→reply"""
+    classification = state.get("intent_classification", "")
+    if classification == "relevant":
+        return "planner"
+    return "reply"

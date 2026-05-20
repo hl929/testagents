@@ -11,6 +11,9 @@ from test_agents.agents.supervisor import (
     route_from_confirm,
     route_from_dispatch,
     route_from_reflect,
+    intent_classifier_node,
+    reply_node,
+    route_from_classifier,
 )
 from test_agents.graph.state import SupervisorState, ExecutionPlan
 
@@ -237,3 +240,81 @@ class TestSaveExperienceNode:
             mock_config.EXPERIENCE_FILE = experience_file
             result = save_experience_node(state)
         assert result == {}
+
+
+class TestIntentClassifierNode:
+    def test_classifies_relevant(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content='{"classification": "relevant", "reason": "明确需求"}')
+        state: SupervisorState = {"user_request": "分析 payment 模块代码变更", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "relevant"
+        assert result["intent_reason"] == "明确需求"
+
+    def test_classifies_irrelevant(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content='{"classification": "irrelevant", "reason": "打招呼"}')
+        state: SupervisorState = {"user_request": "hello", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "irrelevant"
+        assert result["intent_reason"] == "打招呼"
+
+    def test_fallback_to_ambiguous_on_invalid_json(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content="not json at all")
+        state: SupervisorState = {"user_request": "test", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "ambiguous"
+        assert "解析失败" in result["intent_reason"]
+
+    def test_fallback_to_ambiguous_on_llm_exception(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = Exception("network error")
+        state: SupervisorState = {"user_request": "test", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "ambiguous"
+
+
+class TestReplyNode:
+    def test_reply_generates_final_answer(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content="您好！我是 Test Agents...")
+        state: SupervisorState = {
+            "user_request": "hello",
+            "intent_classification": "irrelevant",
+            "intent_reason": "打招呼",
+            "messages": [],
+        }
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = reply_node(state)
+        assert result["final_answer"] == "您好！我是 Test Agents..."
+
+    def test_reply_fallback_on_llm_exception(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = Exception("network error")
+        state: SupervisorState = {
+            "user_request": "hello",
+            "intent_classification": "irrelevant",
+            "intent_reason": "打招呼",
+            "messages": [],
+        }
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = reply_node(state)
+        assert "Test Agents" in result["final_answer"]
+
+    def test_reply_fallback_on_ambiguous(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = Exception("timeout")
+        state: SupervisorState = {
+            "user_request": "帮我看看测试",
+            "intent_classification": "ambiguous",
+            "intent_reason": "信息不足",
+            "messages": [],
+        }
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = reply_node(state)
+        assert "请补充" in result["final_answer"]
