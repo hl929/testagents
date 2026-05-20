@@ -15,6 +15,17 @@ from test_agents.agents.supervisor import (
 from test_agents.graph.state import SupervisorState, ExecutionPlan
 
 
+def test_supervisor_state_has_intent_fields():
+    # TypedDict allows optional fields, so we verify by construction
+    state: SupervisorState = {
+        "user_request": "hello",
+        "intent_classification": "irrelevant",
+        "intent_reason": "用户仅打招呼",
+    }
+    assert state["intent_classification"] == "irrelevant"
+    assert state["intent_reason"] == "用户仅打招呼"
+
+
 class TestRouteFromConfirm:
     def test_confirmed_dispatches(self):
         state: SupervisorState = {"plan": {"confirmed": True, "intent": "test", "steps": []}}
@@ -89,16 +100,30 @@ class TestRouteFromReflect:
 class TestPlannerNode:
     def test_planner_generates_plan(self):
         mock_llm = MagicMock()
-        plan_dict = ExecutionPlan(
+        plan_json = ExecutionPlan(
             intent="分析代码变更",
             steps=[{"step_id": 1, "agent": "code_analyzer", "description": "分析代码", "input_mapping": {}}],
-        ).model_dump()
-        mock_llm.with_structured_output.return_value.invoke.return_value = plan_dict
+        ).model_dump_json()
+        mock_llm.invoke.return_value = MagicMock(content=plan_json)
 
         state: SupervisorState = {"user_request": "分析 payment 模块代码变更", "messages": []}
         with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
             result = planner_node(state)
         assert "plan" in result
+        assert result["plan"]["intent"] == "分析代码变更"
+
+    def test_planner_handles_markdown_fenced_json(self):
+        mock_llm = MagicMock()
+        plan_dict = ExecutionPlan(
+            intent="分析代码变更",
+            steps=[{"step_id": 1, "agent": "code_analyzer", "description": "分析代码", "input_mapping": {}}],
+        ).model_dump()
+        plan_json = json.dumps(plan_dict, ensure_ascii=False)
+        mock_llm.invoke.return_value = MagicMock(content=f"```json\n{plan_json}\n```")
+
+        state: SupervisorState = {"user_request": "分析代码变更", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = planner_node(state)
         assert result["plan"]["intent"] == "分析代码变更"
 
 

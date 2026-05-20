@@ -72,6 +72,8 @@ class SupervisorState(TypedDict, total=False):
     outputs: Annotated[dict, operator.or_]
     final_answer: Optional[str]
     messages: Annotated[list[AnyMessage], add_messages]
+    intent_classification: str
+    intent_reason: str
 
 
 class WorkerState(TypedDict, total=False):
