@@ -1,4 +1,4 @@
-# LangGraph 执行追踪与可观测性设计
+# LangGraph 可观测性与记忆系统设计
 
 **日期**: 2026-05-20
 **方案**: LangSmith + PostgresSaver + PostgresStore
