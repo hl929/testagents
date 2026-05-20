@@ -1,35 +1,39 @@
 # LangGraph 执行追踪与可观测性设计
 
 **日期**: 2026-05-20
-**方案**: LangSmith + PostgresSaver
+**方案**: LangSmith + PostgresSaver + PostgresStore
 
 ## 目标
 
-为 Test Agents v3 建立完整的可观测性体系，覆盖调试排障、生产监控、回放审计三个维度。
+为 Test Agents v3 建立完整的可观测性体系，覆盖调试排障、生产监控、回放审计三个维度，并实现短期记忆与长期记忆的统一管理。
 
 ## 整体架构
 
-两层独立系统各司其职：
+三层独立系统各司其职：
 
-- **Checkpointing 层**：`PostgresSaver` 替换 `InMemorySaver`，负责状态持久化。支撑 `confirm_plan` 的 interrupt/resume、故障恢复、time-travel 回放。
+- **Checkpointing 层**：`PostgresSaver` 替换 `InMemorySaver`，负责短期记忆（thread 内状态持久化）。支撑 `confirm_plan` 的 interrupt/resume、故障恢复、time-travel 回放。
+- **Store 层**：`PostgresStore` 替代 `reflection_experience.md`，负责长期记忆（跨 thread 经验存取与检索）。planner 可按意图类型检索历史经验辅助规划。
 - **Tracing 层**：LangSmith 通过 `LANGSMITH_TRACING=true` 环境变量自动激活，捕获每次 `graph.invoke()` / `graph.stream()` 的完整执行链路。
 
-两者唯一的代码交汇点在 `builder.py` 的 `compile(checkpointer=...)` 参数，其余全靠环境变量和配置。
+代码交汇点在 `builder.py` 的 `compile(checkpointer=..., store=...)` 参数，其余全靠环境变量和配置。
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                  LangGraph Supervisor Graph          │
 │                                                      │
-│  planner → confirm → dispatch → worker → reflect     │
-│                                    ↑          ↓      │
-│                              code_analyzer  synthesize│
-│                              case_reviewer           │
-├──────────────────┬──────────────────────────────────-─┤
-│   Checkpointing  │          Tracing (LangSmith)       │
-│   PostgresSaver  │   自动捕获: 节点/LLM/工具/路由     │
-│   状态持久化      │   环境变量驱动, 零代码改动          │
-│   interrupt恢复   │   Studio 可视化调试                │
-└──────────────────┴────────────────────────────────────┘
+│  planner ←── Store.search() ──→ save_experience     │
+│     ↓           (长期记忆检索)        (长期记忆写入)  │
+│  confirm → dispatch → worker → reflect               │
+│                            ↑          ↓              │
+│                      code_analyzer  synthesize       │
+│                      case_reviewer                   │
+├───────────────┬────────────────┬─────────────────────┤
+│ Checkpointing │     Store      │  Tracing (LangSmith)│
+│ PostgresSaver │ PostgresStore  │  自动捕获:          │
+│ 短期记忆      │ 长期记忆       │  节点/LLM/工具/路由 │
+│ interrupt恢复 │ 跨thread经验   │  环境变量驱动       │
+│ time-travel   │ 按意图检索     │  Studio 可视化调试  │
+└───────────────┴────────────────┴─────────────────────┘
 ```
 
 ## Checkpointing 层升级
@@ -98,6 +102,127 @@ graph.invoke(None, target.config)
 fork_config = graph.update_state(target.config, {"user_request": "修改后的请求"})
 graph.invoke(None, fork_config)
 ```
+
+## Store 层（长期记忆）
+
+### 当前问题
+
+`save_experience` 节点将经验追加写入 `data/reflection_experience.md` 文件，存在以下问题：
+
+- 无检索能力，planner prompt 只能整段注入（当前甚至未实现注入）
+- 文件无限增长，指纹去重只能避免完全重复，无语义去重
+- 非结构化存储，无法按意图类型筛选
+
+### 解决方案
+
+用 LangGraph 的 `Store` 替代文件存储。Store 通过 `compile(store=...)` 挂载，节点函数签名中接收 `store` 参数，可跨 thread 存取。
+
+```
+当前:  save_experience → 写 markdown 文件 → planner 无法按需检索
+升级:  save_experience → store.put() → planner 用 store.search() 按意图检索
+```
+
+### Namespace 设计
+
+经验按意图类型分 namespace 存储：
+
+```python
+namespace = ("experience", intent_type)
+# 例: ("experience", "code_analysis"), ("experience", "case_review"), ("experience", "full_pipeline")
+```
+
+每个经验条目是一个 JSON 文档：
+
+```python
+store.put(
+    namespace=("experience", "code_analysis"),
+    key=f"exp_{timestamp}",
+    value={
+        "intent": "分析订单模块代码变更",
+        "steps": ["code_analyzer"],
+        "results": "step 1: success",
+        "reflection": "分析完成，建议关注异常处理分支",
+        "created_at": "2026-05-20T10:30:00Z",
+    }
+)
+```
+
+### 代码改动
+
+**builder.py** — 挂载 Store：
+
+```python
+from langgraph.store.memory import InMemoryStore
+from langgraph.store.postgres import PostgresStore
+
+def _get_store():
+    mode = os.getenv("LANGGRAPH_STORE", "postgres")
+    if mode == "memory":
+        return InMemoryStore()
+    store = PostgresStore.from_conn_string(
+        os.getenv("LANGGRAPH_DB_URI", "postgresql://localhost:5432/langgraph")
+    )
+    store.setup()
+    return store
+
+def build_graph():
+    # ...
+    return builder.compile(checkpointer=_get_checkpointer(), store=_get_store())
+```
+
+**supervisor.py** — save_experience 节点改用 Store：
+
+```python
+def save_experience_node(state: SupervisorState, *, store: BaseStore) -> dict:
+    intent = state["plan"].intent
+    intent_type = _classify_intent(intent)  # "code_analysis" / "case_review" / "full_pipeline"
+
+    store.put(
+        namespace=("experience", intent_type),
+        key=f"exp_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        value={
+            "intent": intent,
+            "steps": [s.agent for s in state["plan"].steps],
+            "results": _summarize_results(state["step_results"]),
+            "reflection": state.get("reflection_feedback", ""),
+            "created_at": datetime.now().isoformat(),
+        }
+    )
+    return {}
+```
+
+**supervisor.py** — planner 节点检索历史经验：
+
+```python
+def planner_node(state: SupervisorState, *, store: BaseStore, config: RunnableConfig) -> dict:
+    experiences = []
+    for ns in [("experience", "code_analysis"), ("experience", "case_review"), ("experience", "full_pipeline")]:
+        items = store.search(ns, limit=5)
+        experiences.extend([item.value for item in items])
+
+    relevant = _filter_relevant(experiences, state["user_request"])
+    prompt = load_prompt("planner", user_request=state["user_request"], experience=_format_experience(relevant))
+    # ...
+```
+
+### 新增配置项
+
+| 变量 | 说明 | 默认值 |
+|---|---|---|
+| `LANGGRAPH_STORE` | Store 类型（`memory`/`postgres`） | `postgres` |
+
+与 Checkpointer 共用 `LANGGRAPH_DB_URI`，同一 PostgreSQL 实例。
+
+### 迁移策略
+
+1. 提供迁移脚本读取现有 `reflection_experience.md`，解析后写入 Store
+2. `save_experience_node` 不再写文件，`data/reflection_experience.md` 保留为只读历史
+3. 迁移完成后文件可归档
+
+### 未来增强（本次不实现）
+
+- **向量检索**：为 Store 配置 embedding，`store.search()` 支持语义相似度检索，替代当前的粗筛
+- **经验衰减**：按时间或访问频率降权旧经验，避免过时建议影响规划
 
 ## Tracing 层（LangSmith）
 
@@ -190,15 +315,17 @@ def planner(state: SupervisorState) -> dict:
 
 | 测试类型 | 说明 |
 |---|---|
-| 现有单元测试 | 继续使用 `InMemorySaver`，设 `LANGGRAPH_CHECKPOINTER=memory` |
+| 现有单元测试 | 继续使用 `InMemorySaver` + `InMemoryStore`，设 `LANGGRAPH_CHECKPOINTER=memory`、`LANGGRAPH_STORE=memory` |
 | Checkpoint 集成测试 | 新增 `test_checkpoint.py`，用 `SqliteSaver` 验证 state 持久化和 `get_state_history` |
+| Store 集成测试 | 新增 `test_store.py`，用 `InMemoryStore` 验证 `put`/`search`/`get` 及 namespace 隔离 |
 | Tracing 验证 | 测试时设 `LANGSMITH_TRACING=false`，避免测试数据污染 LangSmith |
-| 端到端验证 | 手动触发完整请求，在 LangSmith UI 确认追踪记录完整 |
+| 端到端验证 | 手动触发完整请求，在 LangSmith UI 确认追踪记录完整；验证经验跨 thread 可检索 |
 
 ```python
 # conftest.py
 import os
 os.environ["LANGGRAPH_CHECKPOINTER"] = "memory"
+os.environ["LANGGRAPH_STORE"] = "memory"
 os.environ["LANGSMITH_TRACING"] = "false"
 ```
 
@@ -206,10 +333,11 @@ os.environ["LANGSMITH_TRACING"] = "false"
 
 | 文件 | 改动 |
 |---|---|
-| `test_agents/graph/builder.py` | 替换 InMemorySaver 为 `_get_checkpointer()` 工厂 |
-| `test_agents/config.py` | 新增 `LANGGRAPH_DB_URI`、`LANGGRAPH_CHECKPOINTER` 配置 |
+| `test_agents/graph/builder.py` | 替换 InMemorySaver 为 `_get_checkpointer()` + `_get_store()` 工厂 |
+| `test_agents/config.py` | 新增 `LANGGRAPH_DB_URI`、`LANGGRAPH_CHECKPOINTER`、`LANGGRAPH_STORE` 配置 |
 | `test_agents/main.py` | invoke 调用添加 tags/metadata |
-| `test_agents/agents/supervisor.py` | 关键节点添加结构化日志 |
+| `test_agents/agents/supervisor.py` | save_experience 改用 Store；planner 检索历史经验；关键节点添加结构化日志 |
 | `.env.example` | 新增 LangSmith 和 PostgreSQL 配置模板 |
 | `test_agents/tests/conftest.py` | 测试环境变量默认值 |
 | `test_agents/tests/test_checkpoint.py` | 新增 checkpoint 集成测试 |
+| `scripts/migrate_experience.py` | 新增迁移脚本，将 reflection_experience.md 导入 Store |
