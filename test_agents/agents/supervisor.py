@@ -310,7 +310,7 @@ def route_from_reflect(state: SupervisorState) -> Literal["planner", "synthesize
 
 
 def route_from_classifier(state: SupervisorState) -> Literal["planner", "reply"]:
-    """Route after intent_classifier: relevant→planner, other→reply"""
+    """Route after intent_classifier: relevant→planner, ambiguous/irrelevant→reply"""
     classification = state.get("intent_classification", "")
     if classification == "relevant":
         return "planner"

@@ -117,6 +117,14 @@ class TestRouteFromClassifier:
         state: SupervisorState = {"intent_classification": ""}
         assert route_from_classifier(state) == "reply"
 
+    def test_missing_key_defaults_to_reply(self):
+        state: SupervisorState = {}
+        assert route_from_classifier(state) == "reply"
+
+    def test_unknown_value_goes_reply(self):
+        state: SupervisorState = {"intent_classification": "unknown"}
+        assert route_from_classifier(state) == "reply"
+
 
 class TestPlannerNode:
     def test_planner_generates_plan(self):
