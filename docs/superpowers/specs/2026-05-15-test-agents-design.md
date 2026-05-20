@@ -1,8 +1,4 @@
----
-title: 测试智能体群（Test Agents）设计文档 — Plan-and-Solve + Reflection 范式
-description: 基于 LangGraph 的分层多智能体测试系统，监督者采用 Plan-and-Solve + 反思，执行 Agent 采用 ReAct + 反思，Worker 子图作为图节点注册
-date: 2026-05-15
----
+***
 
 # 测试智能体群（Test Agents）设计文档 — Plan-and-Solve + Reflection 范式
 
@@ -11,8 +7,9 @@ date: 2026-05-15
 基于 LangGraph 的分层多智能体测试系统。用户以自然语言描述需求，监督者自动规划执行步骤，按序调度 Worker Agent 完成任务，全步骤完成后反思评估，经验持久记录。
 
 **架构范式：**
+
 - **监督者**：Plan-and-Solve + 反思（全步骤完成后 LLM 评估，不完整则 replan）
-- **执行者**：ReAct + 反思（LLM 评估结果质量，不通过则重试，受 max_reflections 控制）
+- **执行者**：ReAct + 反思（LLM 评估结果质量，不通过则重试，受 max\_reflections 控制）
 - **Worker 子图**作为主图节点注册，LangGraph 原生支持子图追踪
 - 支持监督者调度和直接调用 Worker 两种模式
 
@@ -66,9 +63,9 @@ date: 2026-05-15
 
 **双重调用模式：**
 
-| 调用模式 | 实现方式 | 适用场景 |
-|---|---|---|
-| 监督者→Worker | Worker 子图作为主图节点，dispatch 路由 | 复杂任务需要拆解时 |
+| 调用模式        | 实现方式                              | 适用场景                 |
+| ----------- | --------------------------------- | -------------------- |
+| 监督者→Worker  | Worker 子图作为主图节点，dispatch 路由       | 复杂任务需要拆解时            |
 | 直接调用 Worker | main.py 中直接 `worker_app.invoke()` | 简单任务，用户明确指定某 Agent 时 |
 
 ### 2.2 目录结构
@@ -201,6 +198,7 @@ class WorkerState(TypedDict):
 dispatch 节点负责双向映射：
 
 **主图 → 子图：**
+
 ```python
 worker_input = {
     "task": plan_step.description,
@@ -218,45 +216,49 @@ worker_input = {
 
 ### 3.4 多模块聚合规则
 
-当有多个 code_analyzer 步骤时，每个步骤产出写入 `outputs["code_change_report"]`（或 Planner 指定的其他 key）。dispatch 节点负责聚合：
+当有多个 code\_analyzer 步骤时，每个步骤产出写入 `outputs["code_change_report"]`（或 Planner 指定的其他 key）。dispatch 节点负责聚合：
+
 - 同 `output_key` 的多份结果自动拼接，用 `## 模块: {module_name}` 标题分隔
 - 不同 `output_key` 的结果隔离存储，互不影响
 - 下游步骤通过 `input_mapping` 引用 `${outputs.code_change_report}` 或 `${outputs.code_change_report_payment}` 读取
 
-### 3.5 input_mapping 规则
+### 3.5 input\_mapping 规则
 
-| 形式 | 示例 | 含义 |
-|---|---|---|
-| 字符串常量 | `"payment"` | 直接传给 agent |
-| Outputs 引用 | `"${outputs.code_change_report}"` | 从 outputs 字典中取值 |
-| 多 key 拼接 | `"${outputs.report_a}\n${outputs.report_b}"` | 拼接多个 outputs 值传给下游 |
+| 形式         | 示例                                           | 含义                 |
+| ---------- | -------------------------------------------- | ------------------ |
+| 字符串常量      | `"payment"`                                  | 直接传给 agent         |
+| Outputs 引用 | `"${outputs.code_change_report}"`            | 从 outputs 字典中取值    |
+| 多 key 拼接   | `"${outputs.report_a}\n${outputs.report_b}"` | 拼接多个 outputs 值传给下游 |
 
 ## 4. 节点设计
 
 ### 4.1 Planner 节点
 
 **职责：**
+
 1. 解析 `user_request`，理解用户意图
-2. 提取参数（targets 列表、test_cases、business_knowledge 等）
+2. 提取参数（targets 列表、test\_cases、business\_knowledge 等）
 3. 生成 `ExecutionPlan`，包含有序步骤列表
 
 **输出：** 更新 state 的 `plan`、`targets`、`test_cases`、`business_knowledge`
 
 **Prompt 设计要点：**
+
 - 告知 LLM 可用的 agent 列表及其能力、入参需求：
 
-| Agent | 能力 | 必需入参 | 产出字段 |
-|---|---|---|---|
-| `code_analyzer` | 分析代码变更 | module_name, source_commit, target_commit | code_change_report |
-| `case_reviewer` | 评审测试用例 | code_change_report, test_cases, business_knowledge | review_results |
+| Agent           | 能力     | 必需入参                                                   | 产出字段                 |
+| --------------- | ------ | ------------------------------------------------------ | -------------------- |
+| `code_analyzer` | 分析代码变更 | module\_name, source\_commit, target\_commit           | code\_change\_report |
+| `case_reviewer` | 评审测试用例 | code\_change\_report, test\_cases, business\_knowledge | review\_results      |
 
 - 要求 LLM 输出严格 JSON 格式的 ExecutionPlan
 - LLM 根据用户意图选择最少步骤组合
-- 多模块时为每个模块生成一个 code_analyzer 步骤
+- 多模块时为每个模块生成一个 code\_analyzer 步骤
 
 **示例 1：** 用户说"分析 payment 模块从 abc1234 到 def5678 的代码变更并评审测试用例"
 
 Planner 提取 targets：
+
 ```json
 "targets": [
   {"module_name": "payment", "source_commit": "abc1234", "target_commit": "def5678", "commit_msg": ""}
@@ -264,6 +266,7 @@ Planner 提取 targets：
 ```
 
 生成的 plan：
+
 ```json
 {
   "intent": "分析代码变更并评审测试用例",
@@ -296,6 +299,7 @@ Planner 提取 targets：
 **示例 2：** 用户说"分析 payment 和 order 模块的代码变更"
 
 Planner 提取 targets：
+
 ```json
 "targets": [
   {"module_name": "payment", "source_commit": "abc1234", "target_commit": "def5678", "commit_msg": ""},
@@ -304,6 +308,7 @@ Planner 提取 targets：
 ```
 
 生成的 plan：
+
 ```json
 {
   "intent": "分析 payment 和 order 模块的代码变更",
@@ -340,18 +345,21 @@ Planner 提取 targets：
 **职责：** 暂停 graph 执行，展示计划给用户确认
 
 **逻辑：**
+
 - 展示 `plan.intent` 和每个步骤的 `description`
 - 用户确认 → `plan.confirmed = True`，继续执行
 - 用户拒绝 → 用户提供反馈建议，回到 planner 重新规划，再次提交确认
 - 最多重试 3 次（`max_confirm_retries`），仍未确认则取消任务，设置 `error` 并终止
 
 **状态字段：**
+
 ```python
 confirm_retry_count: int        # 当前确认重试次数，默认 0
 max_confirm_retries: int        # 最大确认重试次数，默认 3
 ```
 
 **流程：**
+
 ```
 ConfirmPlan
     ├─ 用户确认 → plan.confirmed = True → dispatch
@@ -367,6 +375,7 @@ ConfirmPlan
 **职责：** 按 `plan.steps[current_step_index]` 路由到对应 Worker 子图
 
 **逻辑：**
+
 ```
 1. plan 未确认 → 返回等待
 2. current_step_index >= len(plan.steps) → 所有步骤完成 → 路由到 reflect
@@ -378,10 +387,10 @@ ConfirmPlan
 
 **路由映射：**
 
-| plan.steps[i].agent | Graph 节点 |
-|---|---|
-| `code_analyzer` | `code_analyzer` |
-| `case_reviewer` | `case_reviewer` |
+| plan.steps\[i].agent | Graph 节点        |
+| -------------------- | --------------- |
+| `code_analyzer`      | `code_analyzer` |
+| `case_reviewer`      | `case_reviewer` |
 
 **提示词：** `prompts/dispatch.md`
 
@@ -392,6 +401,7 @@ ConfirmPlan
 **触发条件：** `current_step_index >= len(plan.steps)`
 
 **逻辑：**
+
 ```
 1. LLM 评估：plan 的所有 step_results 是否完整正确地解决了 user_request
 2. 评估结果：
@@ -408,6 +418,7 @@ ConfirmPlan
 **职责：** 将规划与执行经验写入持久化文档
 
 **逻辑：**
+
 ```
 1. 读取本次 plan + step_results + reflection_feedback
 2. LLM 生成经验摘要（意图→规划→结果→反思）
@@ -416,6 +427,7 @@ ConfirmPlan
 ```
 
 **经验文档格式：**
+
 ```markdown
 # 任务规划反思经验
 
@@ -439,6 +451,7 @@ ConfirmPlan
 **职责：** 遍历 `outputs` 汇总所有 Worker 结果，生成最终输出
 
 **逻辑：**
+
 ```
 1. 读取 state["outputs"]，按 key 分组整理
 2. 对每个 output_key，提取内容摘要（超长自动截断）
@@ -447,6 +460,7 @@ ConfirmPlan
 ```
 
 **Prompt 输入：**
+
 ```python
 output_summaries = []
 for key, value in outputs.items():
@@ -465,7 +479,7 @@ prompt = load_prompt(
 
 ### 4.7 Worker 子图（ReAct + 反思）
 
-每个 Worker（code_analyzer / case_reviewer）是独立的 ReAct + Reflection 子图，作为主图节点注册。
+每个 Worker（code\_analyzer / case\_reviewer）是独立的 ReAct + Reflection 子图，作为主图节点注册。
 
 **子图内部结构：**
 
@@ -478,11 +492,13 @@ START → agent → (有工具调用?) → tools → agent (循环)
 ```
 
 **节点：**
+
 1. `agent` — LLM 绑定工具，处理 messages，决定调用工具或直接回答
 2. `tools` — ToolNode，执行工具调用
 3. `reflect` — LLM 评估结果质量
 
 **反思逻辑（reflect 节点）：**
+
 ```
 1. 检查 max_reflections，如果为 0 → 跳过反思，直接通过
 2. LLM 评估结果质量
@@ -492,6 +508,7 @@ START → agent → (有工具调用?) → tools → agent (循环)
 ```
 
 **条件路由（reflect 后）：**
+
 ```python
 def worker_route(state: WorkerState) -> Literal["agent", "__end__"]:
     if state["error"] == "no":
@@ -501,10 +518,11 @@ def worker_route(state: WorkerState) -> Literal["agent", "__end__"]:
     return "agent"  # 重试
 ```
 
-**code_analyzer 子图工具：** `ClaudeCliTool`
-**case_reviewer 子图工具：** `ClaudeCliTool`、`TestCaseParserTool`、`BusinessKnowledgeTool`
+**code\_analyzer 子图工具：** `ClaudeCliTool`
+**case\_reviewer 子图工具：** `ClaudeCliTool`、`TestCaseParserTool`、`BusinessKnowledgeTool`
 
 **子图构建工厂：**
+
 ```python
 def build_worker_graph(tools: list) -> CompiledGraph:
     """构建 ReAct + Reflection Worker 子图"""
@@ -522,6 +540,7 @@ def build_worker_graph(tools: list) -> CompiledGraph:
 ```
 
 **子图编译与注册：**
+
 ```python
 code_analyzer_graph = build_worker_graph(code_analyzer_tools)
 case_reviewer_graph = build_worker_graph(case_reviewer_tools)
@@ -799,11 +818,11 @@ class ToolRegistry:
 
 ### 6.3 工具列表
 
-| 工具 | 类名 | 描述 | 绑定 Worker |
-|---|---|---|---|
-| `claude_cli` | `ClaudeCliTool` | 封装 `claude -p` 调用 | code_analyzer, case_reviewer |
-| `parse_test_cases` | `TestCaseParserTool` | 统一解析 JSON/Text 用例输入 | case_reviewer |
-| `query_business_knowledge` | `BusinessKnowledgeTool` | 按模块名查询本地业务知识 | case_reviewer |
+| 工具                         | 类名                      | 描述                  | 绑定 Worker                      |
+| -------------------------- | ----------------------- | ------------------- | ------------------------------ |
+| `claude_cli`               | `ClaudeCliTool`         | 封装 `claude -p` 调用   | code\_analyzer, case\_reviewer |
+| `parse_test_cases`         | `TestCaseParserTool`    | 统一解析 JSON/Text 用例输入 | case\_reviewer                 |
+| `query_business_knowledge` | `BusinessKnowledgeTool` | 按模块名查询本地业务知识        | case\_reviewer                 |
 
 ### 6.4 使用方式
 
@@ -859,18 +878,18 @@ tools/
 
 ## 8. 错误处理
 
-| 场景 | 处理方式 |
-|---|---|
-| Planner 无法理解意图 | `plan` 为 None，返回错误提示要求用户补充说明 |
-| Planner 输出格式异常 | 重试一次，仍失败则 error 终止 |
-| 用户拒绝计划 | 返回修改意图或终止 |
-| Worker 步骤失败 | 记录 step_results，dispatch 继续下一步 |
-| Worker 反思超次 | max_reflections 到达后强制通过 |
-| 监督者反思 REPLAN | 回 planner 重规划，max_plan_iterations 到达后强制 synthesize |
-| Worker 子图内工具异常 | ToolNode 捕获，返回错误消息给 agent 重试 |
-| 经验写入失败 | 静默跳过，不影响主流程 |
-| 用例格式错误 | TestCaseParserTool 返回结构化错误 |
-| 业务知识库未命中 | 返回空字符串继续执行 |
+| 场景             | 处理方式                                                 |
+| -------------- | ---------------------------------------------------- |
+| Planner 无法理解意图 | `plan` 为 None，返回错误提示要求用户补充说明                         |
+| Planner 输出格式异常 | 重试一次，仍失败则 error 终止                                   |
+| 用户拒绝计划         | 返回修改意图或终止                                            |
+| Worker 步骤失败    | 记录 step\_results，dispatch 继续下一步                      |
+| Worker 反思超次    | max\_reflections 到达后强制通过                             |
+| 监督者反思 REPLAN   | 回 planner 重规划，max\_plan\_iterations 到达后强制 synthesize |
+| Worker 子图内工具异常 | ToolNode 捕获，返回错误消息给 agent 重试                         |
+| 经验写入失败         | 静默跳过，不影响主流程                                          |
+| 用例格式错误         | TestCaseParserTool 返回结构化错误                           |
+| 业务知识库未命中       | 返回空字符串继续执行                                           |
 
 ### 3.6 通用 outputs 机制详解
 
@@ -917,7 +936,7 @@ Synthesize 遍历 outputs：
 
 ### 9.1 增加 Worker（基于 outputs 机制）
 
-新增 Worker 时，**无需修改 `SupervisorState` 定义**，只需三步：
+新增 Worker 时，**无需修改** **`SupervisorState`** **定义**，只需三步：
 
 1. **新增 agent 文件** — 实现 Worker wrapper，指定 `output_key`（如 `test_plan_generator` → `output_key="test_plan"`）
 2. **在 dispatch 路由中注册** — `route_from_dispatch` 增加 agent → node 的映射
@@ -964,50 +983,51 @@ Claude CLI 需单独安装并配置到 PATH 中。
 
 ## 11. 与之前版本的关键差异
 
-| 维度 | v1（Supervisor 模式） | v2（Plan-and-Solve） | v3（Plan-and-Solve + Reflection） |
-|---|---|---|---|
-| 用户输入 | CLI 结构化参数 | 自然语言 user_request | 自然语言 user_request |
-| 监督者范式 | 硬编码 if-else 路由 | Planner + Executor | Planner + Dispatch + Reflect |
-| 监督者反思 | 无 | 无 | 全步骤完成后 LLM 评估，可 replan |
-| Worker 范式 | 简单执行 | 简单执行 | ReAct + 反思子图 |
-| Worker 反思 | 无 | 无 | LLM 评估结果质量，可重试 |
-| 子图集成 | 无 | 无 | Worker 子图作为主图节点注册 |
-| 经验记录 | 无 | 无 | 规划与执行经验持久记录 |
-| 直接调用 | 不支持 | 不支持 | main.py 中直接调 worker_app |
-| 用户确认 | 无 | 有（interrupt） | 有（interrupt） |
-| 参数来源 | 用户直接提供 | Planner 从自然语言提取 | Planner 从自然语言提取 |
-| 步骤间数据传递 | 隐式 | 显式 input_mapping + ${} | 显式 input_mapping + ${outputs.xxx} |
-| 结果汇聚 | 固定字段（硬编码） | 固定字段（硬编码） | 通用 `outputs` 字典（配置驱动） |
+| 维度        | v1（Supervisor 模式） | v2（Plan-and-Solve）      | v3（Plan-and-Solve + Reflection）    |
+| --------- | ----------------- | ----------------------- | ---------------------------------- |
+| 用户输入      | CLI 结构化参数         | 自然语言 user\_request      | 自然语言 user\_request                 |
+| 监督者范式     | 硬编码 if-else 路由    | Planner + Executor      | Planner + Dispatch + Reflect       |
+| 监督者反思     | 无                 | 无                       | 全步骤完成后 LLM 评估，可 replan             |
+| Worker 范式 | 简单执行              | 简单执行                    | ReAct + 反思子图                       |
+| Worker 反思 | 无                 | 无                       | LLM 评估结果质量，可重试                     |
+| 子图集成      | 无                 | 无                       | Worker 子图作为主图节点注册                  |
+| 经验记录      | 无                 | 无                       | 规划与执行经验持久记录                        |
+| 直接调用      | 不支持               | 不支持                     | main.py 中直接调 worker\_app           |
+| 用户确认      | 无                 | 有（interrupt）            | 有（interrupt）                       |
+| 参数来源      | 用户直接提供            | Planner 从自然语言提取         | Planner 从自然语言提取                    |
+| 步骤间数据传递   | 隐式                | 显式 input\_mapping + ${} | 显式 input\_mapping + ${outputs.xxx} |
+| 结果汇聚      | 固定字段（硬编码）         | 固定字段（硬编码）               | 通用 `outputs` 字典（配置驱动）              |
 
 ## 12. 反思与经验机制详解
 
 ### 12.1 监督者反思（层级间反思）
 
-| 项目 | 说明 |
-|---|---|
-| 触发条件 | 所有步骤执行完成后 |
-| 评估方式 | LLM 评估 plan + step_results 是否完整正确地解决 user_request |
-| 通过处理 | needs_replan=False → synthesize |
-| 不通过处理 | needs_replan=True → 回 planner 重规划 |
-| 安全限制 | max_plan_iterations（默认 1，即不重新规划）防止死循环 |
+| 项目    | 说明                                                  |
+| ----- | --------------------------------------------------- |
+| 触发条件  | 所有步骤执行完成后                                           |
+| 评估方式  | LLM 评估 plan + step\_results 是否完整正确地解决 user\_request |
+| 通过处理  | needs\_replan=False → synthesize                    |
+| 不通过处理 | needs\_replan=True → 回 planner 重规划                  |
+| 安全限制  | max\_plan\_iterations（默认 1，即不重新规划）防止死循环             |
 
 ### 12.2 Worker 反思（层级内反思）
 
-| 项目 | 说明 |
-|---|---|
-| 触发条件 | agent 执行完（无工具调用后） |
-| 评估方式 | LLM 评估结果质量 |
-| 通过处理 | error="no" → 子图结束 |
+| 项目    | 说明                                   |
+| ----- | ------------------------------------ |
+| 触发条件  | agent 执行完（无工具调用后）                    |
+| 评估方式  | LLM 评估结果质量                           |
+| 通过处理  | error="no" → 子图结束                    |
 | 不通过处理 | error="yes" → 反馈写回 messages，agent 重试 |
-| 安全限制 | max_reflections（默认 0，即默认不重试） |
+| 安全限制  | max\_reflections（默认 0，即默认不重试）        |
 
 ### 12.3 经验记录
 
-| 项目 | 说明 |
-|---|---|
-| 触发条件 | 每次 synthesize 后 |
-| 记录内容 | 意图、规划、结果、反思反馈 |
-| 去重方式 | LLM 语义判断是否与已有经验重复 |
-| 存储位置 | data/reflection_experience.md |
-| 当前使用 | 只记录，不引用 |
-| 未来扩展 | planner 读取经验辅助规划 |
+| 项目   | 说明                             |
+| ---- | ------------------------------ |
+| 触发条件 | 每次 synthesize 后                |
+| 记录内容 | 意图、规划、结果、反思反馈                  |
+| 去重方式 | LLM 语义判断是否与已有经验重复              |
+| 存储位置 | data/reflection\_experience.md |
+| 当前使用 | 只记录，不引用                        |
+| 未来扩展 | planner 读取经验辅助规划               |
+
