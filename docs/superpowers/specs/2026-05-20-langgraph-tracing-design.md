@@ -7,6 +7,37 @@
 
 为 Test Agents v3 建立完整的可观测性体系，覆盖调试排障、生产监控、回放审计三个维度，并实现短期记忆与长期记忆的统一管理。
 
+## 依赖与安装
+
+### Python 包（pip）
+
+```bash
+pip install -U "psycopg[binary,pool]" langgraph-checkpoint-postgres langsmith
+```
+
+| 包 | 版本 | 用途 | 说明 |
+|---|---|---|---|
+| `langgraph-checkpoint-postgres` | >=3.1.0 | PostgresSaver + PostgresStore | 同时提供 Checkpointing 和 Store 的 PostgreSQL 实现 |
+| `psycopg[binary,pool]` | >=3.2.0 | PostgreSQL 驱动 | `binary` 提供 C 加速，`pool` 提供连接池；`langgraph-checkpoint-postgres` 的依赖 |
+| `langsmith` | >=0.3.45 | LangSmith 追踪 SDK | 已作为 `langchain-core` 的依赖安装，通常无需单独安装 |
+
+**注意**：`PostgresStore` 不是独立包，它包含在 `langgraph-checkpoint-postgres` 中（`from langgraph.store.postgres import PostgresStore`）。不需要安装 `langgraph-store-postgres`（该包不存在）。
+
+### 基础设施
+
+| 工具 | 用途 | 安装方式 |
+|---|---|---|
+| PostgreSQL 14+ | Checkpoint + Store 数据库 | `docker run -d --name langgraph-pg -p 5432:5432 -e POSTGRES_DB=langgraph postgres:16` |
+
+### requirements.txt 新增
+
+```
+langgraph-checkpoint-postgres>=3.1.0
+psycopg[binary,pool]>=3.2.0
+```
+
+`langsmith` 已通过 `langchain-core` 间接依赖，无需显式添加。
+
 ## 整体架构
 
 三层独立系统各司其职：
@@ -80,11 +111,7 @@ def build_graph():
 
 ### 数据库要求
 
-PostgreSQL 14+，LangGraph 自动建表。开发环境 Docker 启动：
-
-```bash
-docker run -d --name langgraph-pg -p 5432:5432 -e POSTGRES_DB=langgraph postgres:16
-```
+PostgreSQL 14+，LangGraph 自动建表（`cp.setup()` / `store.setup()`）。开发环境 Docker 启动方式见上方「依赖与安装」章节。
 
 ### Time-travel 能力
 
