@@ -26,7 +26,7 @@ def test_graph_has_all_nodes():
         mock_cr.return_value = MagicMock()
         graph = build_graph()
         node_names = set(graph.get_graph().nodes.keys())
-        for expected in ["intent_classifier", "planner", "confirm_plan", "dispatch", "code_analyzer", "case_reviewer", "reflect", "synthesize", "save_experience"]:
+        for expected in ["intent_classifier", "planner", "confirm_plan", "dispatch", "code_analyzer", "case_reviewer", "reflect", "synthesize", "save_experience", "reply"]:
             assert expected in node_names, f"Missing node: {expected}"
 
 
