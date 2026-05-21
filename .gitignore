@@ -6,3 +6,4 @@ dist/
 build/
 .env
 .claude/settings.local.json
+local_file/
