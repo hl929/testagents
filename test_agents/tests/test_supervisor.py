@@ -360,6 +360,17 @@ class TestIntentClassifierNode:
         prompt_arg = mock_llm.invoke.call_args[0][0][0].content
         assert "分析 payment 模块" in prompt_arg
 
+    def test_classifier_prompt_mentions_extracted(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(
+            content='{"classification": "relevant", "reason": "test", "extracted": {"goal": "分析代码"}}'
+        )
+        state: SupervisorState = {"user_request": "分析代码", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            intent_classifier_node(state)
+        prompt_arg = mock_llm.invoke.call_args[0][0][0].content
+        assert "extracted" in prompt_arg
+
 
 class TestReplyNode:
     def test_reply_generates_final_answer(self):
