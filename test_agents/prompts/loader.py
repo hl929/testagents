@@ -1,8 +1,10 @@
 """Prompt 模板加载器"""
 
 import os
+import re
 
 _PROMPTS_DIR = os.path.dirname(__file__)
+_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
 
 def load_prompt(name: str, **kwargs) -> str:
@@ -18,8 +20,11 @@ def load_prompt(name: str, **kwargs) -> str:
     path = os.path.join(_PROMPTS_DIR, f"{name}.md")
     with open(path, "r", encoding="utf-8") as f:
         template = f.read()
-    class _Defaults(dict):
-        def __missing__(self, key):
-            return f"{{{key}}}"
 
-    return template.format_map(_Defaults(kwargs))
+    def _replace(match: re.Match) -> str:
+        key = match.group(1)
+        if key in kwargs:
+            return str(kwargs[key])
+        return match.group(0)
+
+    return _PLACEHOLDER_RE.sub(_replace, template)

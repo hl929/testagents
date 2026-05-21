@@ -3,6 +3,12 @@
 import os
 from typing import Optional
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 class Config:
     """配置类"""
