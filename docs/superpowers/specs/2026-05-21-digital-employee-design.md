@@ -3,6 +3,16 @@
 **日期**：2026-05-21
 **作者**：基于 brainstorming 与用户决策共同沉淀
 **适用项目**：test_agents（基于 LangGraph 的多智能体测试系统）
+
+---
+
+> **🟡 状态：pending validation（待验证）**
+>
+> 本 spec 经 `/plan-ceo-review` 审查后判定为**预设性架构**——缺乏真实任务数据和业务方约束。
+> 已锁定先执行 **7-14 天 Validation Spike**（见 [`docs/superpowers/specs/2026-05-21-digital-employee-spike.md`](./2026-05-21-digital-employee-spike.md)），
+> 收集真实失败模式后再决定本 spec 哪些模块进入实施，或是否需要重写。
+>
+> **在 spike 完成前，本 spec 任何阶段都不进入实施。**
 **目标定位**：将现有"工具型 Agent"演进为**专家型测试数字员工**
 
 ---
