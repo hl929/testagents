@@ -9,8 +9,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
 from langchain_openai import ChatOpenAI
 
+from test_agents.agents.worker_base import build_worker_task
 from test_agents.config import config
-from test_agents.graph.state import SupervisorState, ExecutionPlan
+from test_agents.graph.state import SupervisorState, ExecutionPlan, IntentExtraction
 from test_agents.prompts.loader import load_prompt
 from test_agents.tools.base import ToolRegistry
 
@@ -33,7 +34,7 @@ def _strip_markdown_json(text: str) -> str:
 
 
 def intent_classifier_node(state: SupervisorState) -> dict:
-    """Classify user request intent before entering planner."""
+    """Classify user request intent and extract structured info for relevant requests."""
     llm = get_llm()
     user_request = state.get("user_request", "")
     prompt = load_prompt("intent_classifier", user_request=user_request)
@@ -46,13 +47,25 @@ def intent_classifier_node(state: SupervisorState) -> dict:
         reason = assessment.get("reason", "")
         if classification not in ("relevant", "ambiguous", "irrelevant"):
             classification = "ambiguous"
+
+        intent_analysis = None
+        if classification == "relevant":
+            extracted = assessment.get("extracted")
+            if extracted and isinstance(extracted, dict):
+                try:
+                    validated = IntentExtraction.model_validate(extracted)
+                    intent_analysis = validated.model_dump()
+                except Exception:
+                    intent_analysis = None
     except (json.JSONDecodeError, Exception):
         classification = "ambiguous"
         reason = "意图分类解析失败，默认按模糊请求处理"
+        intent_analysis = None
 
     return {
         "intent_classification": classification,
         "intent_reason": reason,
+        "intent_analysis": intent_analysis,
     }
 
 
@@ -89,12 +102,44 @@ def reply_node(state: SupervisorState) -> dict:
         return {"final_answer": fallback}
 
 
+def _format_intent_analysis(analysis: dict) -> str:
+    """将 intent_analysis 格式化为 planner 可读的文本"""
+    parts = []
+    if analysis.get("goal"):
+        parts.append(f"- 核心意图：{analysis['goal']}")
+    if analysis.get("modules"):
+        parts.append(f"- 涉及模块：{', '.join(analysis['modules'])}")
+    if analysis.get("source_commit") or analysis.get("target_commit"):
+        parts.append(f"- Commit 范围：{analysis.get('source_commit', '?')} → {analysis.get('target_commit', '?')}")
+    if analysis.get("needs_code_analysis"):
+        parts.append("- 需要：代码变更分析")
+    if analysis.get("needs_case_review"):
+        parts.append("- 需要：测试用例评审")
+    if analysis.get("test_cases_provided"):
+        parts.append("- 用户已提供测试用例")
+    if analysis.get("missing_info"):
+        parts.append(f"- 缺少信息：{', '.join(analysis['missing_info'])}")
+    return "\n".join(parts)
+
+
 def planner_node(state: SupervisorState) -> dict:
     """Parse user_request and generate ExecutionPlan"""
     llm = get_llm()
     user_request = state.get("user_request", "")
+    intent_analysis = state.get("intent_analysis")
     tools_info = ToolRegistry.render_all()
-    prompt = load_prompt("planner", user_request=user_request, tools_info=tools_info)
+
+    if intent_analysis:
+        analysis_text = _format_intent_analysis(intent_analysis)
+    else:
+        analysis_text = "(无)"
+
+    prompt = load_prompt(
+        "planner",
+        user_request=user_request,
+        tools_info=tools_info,
+        intent_analysis=analysis_text,
+    )
 
     response = llm.invoke([HumanMessage(content=prompt)])
     content = _strip_markdown_json(response.content)
@@ -134,9 +179,38 @@ def confirm_plan_node(state: SupervisorState) -> dict:
         }
 
 
+def _default_output_key(agent: str) -> str:
+    """Default output key per agent type."""
+    if agent == "code_analyzer":
+        return "code_change_report"
+    elif agent == "case_reviewer":
+        return "review_results"
+    return ""
+
+
 def dispatch_node(state: SupervisorState) -> dict:
-    """Dispatch hub - routes to workers or reflect based on current_step_index"""
-    return {}
+    """Dispatch hub - prepares worker_input and routes via conditional edges."""
+    plan = state.get("plan") or {}
+    steps = plan.get("steps", []) if isinstance(plan, dict) else []
+    current_index = state.get("current_step_index", 0)
+
+    if current_index >= len(steps):
+        return {}
+
+    step = steps[current_index]
+    task_desc, messages = build_worker_task(step, state)
+    output_key = step.get("output_key", "") or _default_output_key(step.get("agent", ""))
+
+    worker_input = {
+        "task": task_desc,
+        "messages": messages,
+        "error": "no",
+        "reflection_count": 0,
+        "max_reflections": 0,
+        "output_key": output_key,
+        "result": "",
+    }
+    return {"worker_input": worker_input}
 
 
 def reflect_node(state: SupervisorState) -> dict:

@@ -191,6 +191,72 @@ class TestPlannerNode:
             result = planner_node(state)
         assert result["plan"]["intent"] == "分析代码变更"
 
+    def test_planner_with_intent_analysis(self):
+        mock_llm = MagicMock()
+        plan_json = ExecutionPlan(
+            intent="分析代码变更",
+            steps=[{"step_id": 1, "agent": "code_analyzer", "description": "分析代码", "input_mapping": {}}],
+        ).model_dump_json()
+        mock_llm.invoke.return_value = MagicMock(content=plan_json)
+
+        state: SupervisorState = {
+            "user_request": "分析 payment 模块代码变更",
+            "intent_analysis": {
+                "goal": "分析代码变更",
+                "modules": ["payment"],
+                "source_commit": "abc1234",
+                "target_commit": "def5678",
+                "needs_code_analysis": True,
+                "needs_case_review": False,
+                "test_cases_provided": False,
+                "missing_info": [],
+            },
+            "messages": [],
+        }
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = planner_node(state)
+        assert "plan" in result
+        prompt_arg = mock_llm.invoke.call_args[0][0][0].content
+        assert "核心意图" in prompt_arg
+        assert "payment" in prompt_arg
+
+    def test_planner_without_intent_analysis(self):
+        mock_llm = MagicMock()
+        plan_json = ExecutionPlan(
+            intent="分析代码变更",
+            steps=[{"step_id": 1, "agent": "code_analyzer", "description": "分析代码", "input_mapping": {}}],
+        ).model_dump_json()
+        mock_llm.invoke.return_value = MagicMock(content=plan_json)
+
+        state: SupervisorState = {
+            "user_request": "分析 payment 模块代码变更",
+            "intent_analysis": None,
+            "messages": [],
+        }
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = planner_node(state)
+        assert "plan" in result
+        prompt_arg = mock_llm.invoke.call_args[0][0][0].content
+        assert "(无)" in prompt_arg
+
+    def test_planner_prompt_contains_intent_analysis_section(self):
+        mock_llm = MagicMock()
+        plan_json = ExecutionPlan(
+            intent="分析代码变更",
+            steps=[{"step_id": 1, "agent": "code_analyzer", "description": "分析代码", "input_mapping": {}}],
+        ).model_dump_json()
+        mock_llm.invoke.return_value = MagicMock(content=plan_json)
+
+        state: SupervisorState = {
+            "user_request": "分析代码变更",
+            "intent_analysis": {"goal": "分析代码变更"},
+            "messages": [],
+        }
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            planner_node(state)
+        prompt_arg = mock_llm.invoke.call_args[0][0][0].content
+        assert "意图解析结果" in prompt_arg
+
 
 class TestConfirmPlanNode:
     def test_confirm_plan_interrupts(self):
@@ -308,21 +374,25 @@ class TestSaveExperienceNode:
 class TestIntentClassifierNode:
     def test_classifies_relevant(self):
         mock_llm = MagicMock()
-        mock_llm.invoke.return_value = MagicMock(content='{"classification": "relevant", "reason": "明确需求"}')
+        mock_llm.invoke.return_value = MagicMock(
+            content='{"classification": "relevant", "reason": "明确需求", "extracted": {"goal": "分析代码变更"}}'
+        )
         state: SupervisorState = {"user_request": "分析 payment 模块代码变更", "messages": []}
         with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
             result = intent_classifier_node(state)
         assert result["intent_classification"] == "relevant"
         assert result["intent_reason"] == "明确需求"
+        assert result["intent_analysis"] is not None
+        assert result["intent_analysis"]["goal"] == "分析代码变更"
 
     def test_classifies_relevant_with_markdown_fenced_json(self):
         mock_llm = MagicMock()
-        mock_llm.invoke.return_value = MagicMock(content='```json\n{"classification": "relevant", "reason": "明确需求"}\n```')
+        mock_llm.invoke.return_value = MagicMock(content='```json\n{"classification": "relevant", "reason": "明确需求", "extracted": {"goal": "分析代码变更"}}\n```')
         state: SupervisorState = {"user_request": "分析代码", "messages": []}
         with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
             result = intent_classifier_node(state)
         assert result["intent_classification"] == "relevant"
-        assert result["intent_reason"] == "明确需求"
+        assert result["intent_analysis"] is not None
 
     def test_classifies_irrelevant(self):
         mock_llm = MagicMock()
@@ -332,6 +402,7 @@ class TestIntentClassifierNode:
             result = intent_classifier_node(state)
         assert result["intent_classification"] == "irrelevant"
         assert result["intent_reason"] == "打招呼"
+        assert result["intent_analysis"] is None
 
     def test_fallback_to_ambiguous_on_invalid_json(self):
         mock_llm = MagicMock()
@@ -341,6 +412,7 @@ class TestIntentClassifierNode:
             result = intent_classifier_node(state)
         assert result["intent_classification"] == "ambiguous"
         assert "解析失败" in result["intent_reason"]
+        assert result["intent_analysis"] is None
 
     def test_fallback_to_ambiguous_on_llm_exception(self):
         mock_llm = MagicMock()
@@ -350,6 +422,7 @@ class TestIntentClassifierNode:
             result = intent_classifier_node(state)
         assert result["intent_classification"] == "ambiguous"
         assert "解析失败" in result["intent_reason"]
+        assert result["intent_analysis"] is None
 
     def test_classifier_prompt_contains_user_request(self):
         mock_llm = MagicMock()
@@ -370,6 +443,66 @@ class TestIntentClassifierNode:
             intent_classifier_node(state)
         prompt_arg = mock_llm.invoke.call_args[0][0][0].content
         assert "extracted" in prompt_arg
+
+    def test_classifies_relevant_with_full_extracted(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(
+            content='{"classification": "relevant", "reason": "明确需求", "extracted": {"goal": "分析代码变更", "modules": ["payment"], "source_commit": "abc1234", "target_commit": "def5678", "needs_code_analysis": true, "needs_case_review": false, "test_cases_provided": false, "missing_info": []}}'
+        )
+        state: SupervisorState = {"user_request": "分析 payment 模块代码变更", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "relevant"
+        assert result["intent_reason"] == "明确需求"
+        assert result["intent_analysis"] is not None
+        assert result["intent_analysis"]["goal"] == "分析代码变更"
+        assert result["intent_analysis"]["modules"] == ["payment"]
+
+    def test_classifies_relevant_without_extracted(self):
+        """relevant but extracted missing → intent_analysis = None, classification preserved"""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(
+            content='{"classification": "relevant", "reason": "明确需求"}'
+        )
+        state: SupervisorState = {"user_request": "分析代码变更", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "relevant"
+        assert result["intent_analysis"] is None
+
+    def test_classifies_relevant_with_invalid_extracted(self):
+        """relevant but extracted has invalid fields → intent_analysis = None, classification preserved"""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(
+            content='{"classification": "relevant", "reason": "明确需求", "extracted": {"goal": 123}}'
+        )
+        state: SupervisorState = {"user_request": "分析代码变更", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "relevant"
+        assert result["intent_analysis"] is None
+
+    def test_classifies_ambiguous_no_extracted(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(
+            content='{"classification": "ambiguous", "reason": "信息不足"}'
+        )
+        state: SupervisorState = {"user_request": "帮我看看测试", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "ambiguous"
+        assert result["intent_analysis"] is None
+
+    def test_classifies_irrelevant_no_extracted(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(
+            content='{"classification": "irrelevant", "reason": "打招呼"}'
+        )
+        state: SupervisorState = {"user_request": "hello", "messages": []}
+        with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
+            result = intent_classifier_node(state)
+        assert result["intent_classification"] == "irrelevant"
+        assert result["intent_analysis"] is None
 
 
 class TestReplyNode:
