@@ -51,11 +51,14 @@ def _build_initial_state(user_request: str) -> dict:
         "max_confirm_retries": config.MAX_CONFIRM_RETRIES,
         "final_answer": None,
         "messages": [],
+        "intent_classification": "",
+        "intent_reason": "",
     }
 
 
 def run_test_agents(user_request: str) -> dict:
     """运行测试智能体群（简单请求直接走 Worker，复杂请求走 Supervisor）"""
+    build_graph()
     simple_agent = is_simple_request(user_request)
     if simple_agent:
         return _run_direct_worker(user_request, simple_agent)
@@ -105,7 +108,7 @@ def _run_supervisor(user_request: str) -> dict:
         if not state.next:
             break
         plan = state.values.get("plan", {})
-        _display_plan(plan)
+        _display_plan(plan, file=sys.stderr)
         confirmed = input("\n确认计划？(y/n): ").lower().strip()
         if confirmed == "y":
             app.invoke(Command(resume={"confirmed": True}), thread_config)
@@ -116,15 +119,17 @@ def _run_supervisor(user_request: str) -> dict:
     return final_state.values
 
 
-def _display_plan(plan: dict):
+def _display_plan(plan: dict, file=None):
     """Display execution plan for user confirmation"""
+    if file is None:
+        file = sys.stdout
     if not plan:
-        print("（无计划）")
+        print("（无计划）", file=file)
         return
-    print(f"\n执行计划: {plan.get('intent', 'N/A')}")
-    print("-" * 40)
+    print(f"\n执行计划: {plan.get('intent', 'N/A')}", file=file)
+    print("-" * 40, file=file)
     for step in plan.get("steps", []):
-        print(f"  步骤 {step.get('step_id')}: [{step.get('agent')}] {step.get('description')}")
+        print(f"  步骤 {step.get('step_id')}: [{step.get('agent')}] {step.get('description')}", file=file)
 
 
 def main():
@@ -142,7 +147,8 @@ def main():
     result = run_test_agents(user_request)
 
     if args.output == "json":
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        # ensure_ascii=True 避免 Windows GBK 终端编码失败
+        print(json.dumps(result, ensure_ascii=True, indent=2, default=str))
     else:
         if result.get("final_answer"):
             print(f"\n{result['final_answer']}")
