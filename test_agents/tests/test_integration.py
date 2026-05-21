@@ -5,6 +5,8 @@ Tests for the complete supervisor pipeline (planner → confirm → dispatch →
 using extensive mocking for LLM and worker subgraphs.
 """
 
+import json
+
 import pytest
 from unittest.mock import patch, MagicMock
 from langchain_core.messages import AIMessage
@@ -165,15 +167,21 @@ def test_resolve_input_mixed_text_and_refs():
 
 def test_full_pipeline_mocked():
     """Test the complete supervisor pipeline with mocks for all external dependencies"""
-    # Mock planner LLM response
-    mock_planner_response = MagicMock()
-    mock_planner_response.invoke.return_value = {
+    # Mock intent classifier LLM response
+    mock_classifier_response = MagicMock()
+    mock_classifier_response.content = '{"classification": "relevant", "reason": "明确需求"}'
+
+    # Mock planner LLM response (now via llm.invoke, not with_structured_output)
+    plan_json = json.dumps({
         "intent": "测试订单模块",
         "steps": [
-            {"agent": "code_analyzer", "step_id": 1, "description": "分析订单模块代码变更"},
-            {"agent": "case_reviewer", "step_id": 2, "description": "评审订单模块测试用例"}
-        ]
-    }
+            {"agent": "code_analyzer", "step_id": 1, "description": "分析订单模块代码变更", "input_mapping": {}, "output_key": "code_change_report"},
+            {"agent": "case_reviewer", "step_id": 2, "description": "评审订单模块测试用例", "input_mapping": {}, "output_key": "review_results"}
+        ],
+        "confirmed": False,
+    }, ensure_ascii=False)
+    mock_planner_response = MagicMock()
+    mock_planner_response.content = plan_json
 
     # Mock reflect LLM response
     mock_reflect_response = MagicMock()
@@ -210,11 +218,13 @@ def test_full_pipeline_mocked():
         mock_supervisor_llm.return_value = mock_llm_instance
         mock_builder_llm.return_value = mock_llm_instance
 
-        # Configure LLM for planning (with structured output)
-        mock_llm_instance.with_structured_output.return_value = mock_planner_response
-
-        # Configure LLM for reflection and synthesis (without structured output)
-        mock_llm_instance.invoke.side_effect = [mock_reflect_response, mock_synthesize_response]
+        # classifier + planner + reflect + synthesize all use llm.invoke()
+        mock_llm_instance.invoke.side_effect = [
+            mock_classifier_response,
+            mock_planner_response,
+            mock_reflect_response,
+            mock_synthesize_response,
+        ]
 
         # Mock LLM with tools binding (used for workers)
         mock_llm_with_tools = MagicMock()
@@ -237,6 +247,103 @@ def test_full_pipeline_mocked():
         assert "final_answer" in result
 
 
+def test_irrelevant_request_skips_planner():
+    """End-to-end: irrelevant request should go intent_classifier → reply → END without planner"""
+    mock_classifier_response = MagicMock()
+    mock_classifier_response.content = '{"classification": "irrelevant", "reason": "打招呼"}'
+
+    mock_reply_response = MagicMock()
+    mock_reply_response.content = "您好！我是 Test Agents，专门用于分析代码变更..."
+
+    with patch("test_agents.agents.supervisor.get_llm") as mock_supervisor_llm, \
+         patch("test_agents.graph.builder.get_llm") as mock_builder_llm:
+        mock_llm_instance = MagicMock()
+        mock_supervisor_llm.return_value = mock_llm_instance
+        mock_builder_llm.return_value = mock_llm_instance
+        mock_llm_instance.invoke.side_effect = [
+            mock_classifier_response,
+            mock_reply_response,
+        ]
+
+        result = run_test_agents("hello")
+
+    assert result.get("final_answer") == "您好！我是 Test Agents，专门用于分析代码变更..."
+    assert not result.get("plan")
+
+
+def test_ambiguous_request_gets_clarification():
+    """End-to-end: ambiguous request should get a reply asking for more info"""
+    mock_classifier_response = MagicMock()
+    mock_classifier_response.content = '{"classification": "ambiguous", "reason": "信息不足"}'
+
+    mock_reply_response = MagicMock()
+    mock_reply_response.content = "请补充模块名和 commit 范围..."
+
+    with patch("test_agents.agents.supervisor.get_llm") as mock_supervisor_llm, \
+         patch("test_agents.graph.builder.get_llm") as mock_builder_llm:
+        mock_llm_instance = MagicMock()
+        mock_supervisor_llm.return_value = mock_llm_instance
+        mock_builder_llm.return_value = mock_llm_instance
+        mock_llm_instance.invoke.side_effect = [
+            mock_classifier_response,
+            mock_reply_response,
+        ]
+
+        result = run_test_agents("帮我看看测试")
+
+    assert result.get("final_answer") == "请补充模块名和 commit 范围..."
+
+
+def test_relevant_request_goes_full_pipeline():
+    """End-to-end: relevant request should still go through full plan-and-solve flow"""
+    mock_classifier_response = MagicMock()
+    mock_classifier_response.content = '{"classification": "relevant", "reason": "明确需求"}'
+
+    plan_json = json.dumps({
+        "intent": "测试订单模块",
+        "steps": [
+            {"agent": "code_analyzer", "step_id": 1, "description": "分析订单模块", "input_mapping": {}, "output_key": "code_change_report"},
+        ],
+        "confirmed": False,
+    }, ensure_ascii=False)
+    mock_planner_response = MagicMock()
+    mock_planner_response.content = plan_json
+
+    mock_reflect_response = MagicMock()
+    mock_reflect_response.content = '{"assessment": "COMPLETE", "feedback": ""}'
+
+    mock_synthesize_response = MagicMock()
+    mock_synthesize_response.content = "分析完成"
+
+    mock_code_analyzer_result = {
+        "outputs": {"code_change_report": "代码变更分析完成"},
+        "current_step_index": 1,
+        "step_results": [{"step_id": 1, "agent": "code_analyzer", "status": "success", "output_key": "code_change_report"}],
+    }
+
+    with patch("test_agents.agents.supervisor.get_llm") as mock_supervisor_llm, \
+         patch("test_agents.graph.builder.get_llm") as mock_builder_llm, \
+         patch("test_agents.agents.supervisor.interrupt") as mock_interrupt, \
+         patch("test_agents.graph.builder.code_analyzer_wrapper") as mock_code_analyzer_wrapper:
+
+        mock_llm_instance = MagicMock()
+        mock_supervisor_llm.return_value = mock_llm_instance
+        mock_builder_llm.return_value = mock_llm_instance
+
+        mock_llm_instance.invoke.side_effect = [
+            mock_classifier_response,
+            mock_planner_response,
+            mock_reflect_response,
+            mock_synthesize_response,
+        ]
+
+        mock_interrupt.return_value = {"confirmed": True}
+        mock_code_analyzer_wrapper.return_value = mock_code_analyzer_result
+
+        result = run_test_agents("请全面分析订单模块的代码变更并评审测试用例")
+
+    assert result.get("outputs", {}).get("code_change_report") == "代码变更分析完成"
+    assert result.get("final_answer") == "分析完成"
 
 
 def test_direct_worker_invocation_code_analyzer():
