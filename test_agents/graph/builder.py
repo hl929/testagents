@@ -13,6 +13,9 @@ from test_agents.agents.supervisor import (
     route_from_confirm,
     route_from_dispatch,
     route_from_reflect,
+    route_from_classifier,
+    intent_classifier_node,
+    reply_node,
     get_llm,
 )
 from test_agents.agents.code_analyzer import (
@@ -53,15 +56,24 @@ def build_graph():
     graph.add_node("reflect", reflect_node)
     graph.add_node("synthesize", synthesize_node)
     graph.add_node("save_experience", save_experience_node)
+    graph.add_node("intent_classifier", intent_classifier_node)
+    graph.add_node("reply", reply_node)
 
     # Fixed edges
-    graph.add_edge(START, "planner")
+    graph.add_edge(START, "intent_classifier")
+    graph.add_edge("reply", END)
     graph.add_edge("code_analyzer", "dispatch")
     graph.add_edge("case_reviewer", "dispatch")
     graph.add_edge("synthesize", "save_experience")
     graph.add_edge("save_experience", END)
 
     # Conditional edges
+    graph.add_conditional_edges(
+        "intent_classifier",
+        route_from_classifier,
+        {"planner": "planner", "reply": "reply"},
+    )
+
     graph.add_conditional_edges("planner", lambda state: "confirm_plan", {"confirm_plan": "confirm_plan"})
 
     graph.add_conditional_edges(
