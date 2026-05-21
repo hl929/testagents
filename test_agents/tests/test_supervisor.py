@@ -15,7 +15,43 @@ from test_agents.agents.supervisor import (
     reply_node,
     route_from_classifier,
 )
-from test_agents.graph.state import SupervisorState, ExecutionPlan
+from test_agents.graph.state import SupervisorState, ExecutionPlan, IntentExtraction
+
+
+def test_intent_extraction_model_validates():
+    """IntentExtraction accepts valid extracted data"""
+    extracted = IntentExtraction(
+        goal="分析代码变更并评审测试用例",
+        modules=["payment"],
+        source_commit="abc1234",
+        target_commit="def5678",
+        needs_code_analysis=True,
+        needs_case_review=True,
+    )
+    assert extracted.goal == "分析代码变更并评审测试用例"
+    assert extracted.modules == ["payment"]
+    assert extracted.needs_code_analysis is True
+
+
+def test_intent_extraction_model_defaults():
+    """IntentExtraction fields have sensible defaults"""
+    extracted = IntentExtraction(goal="评审测试用例")
+    assert extracted.modules == []
+    assert extracted.source_commit == ""
+    assert extracted.target_commit == ""
+    assert extracted.needs_code_analysis is False
+    assert extracted.needs_case_review is False
+    assert extracted.test_cases_provided is False
+    assert extracted.missing_info == []
+
+
+def test_supervisor_state_has_intent_analysis():
+    state: SupervisorState = {
+        "intent_classification": "relevant",
+        "intent_reason": "明确需求",
+        "intent_analysis": {"goal": "分析代码变更"},
+    }
+    assert state["intent_analysis"] == {"goal": "分析代码变更"}
 
 
 def test_supervisor_state_has_intent_fields():
@@ -187,7 +223,8 @@ class TestDispatchNode:
             "current_step_index": 0,
         }
         result = dispatch_node(state)
-        assert result == {}
+        assert "worker_input" in result
+        assert result["worker_input"]["output_key"] == "code_change_report"
 
 
 class TestReflectNode:

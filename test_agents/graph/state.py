@@ -55,6 +55,17 @@ class AnalysisTarget(BaseModel):
         return value
 
 
+class IntentExtraction(BaseModel):
+    goal: str = Field(description="用户核心意图，如'分析代码变更并评审测试用例'")
+    modules: list[str] = Field(default_factory=list, description="涉及的模块名列表")
+    source_commit: str = Field(default="", description="源 commit SHA")
+    target_commit: str = Field(default="", description="目标 commit SHA")
+    needs_code_analysis: bool = Field(default=False, description="是否需要代码变更分析")
+    needs_case_review: bool = Field(default=False, description="是否需要测试用例评审")
+    test_cases_provided: bool = Field(default=False, description="用户是否提供了测试用例")
+    missing_info: list[str] = Field(default_factory=list, description="缺少的关键信息")
+
+
 class SupervisorState(TypedDict, total=False):
     user_request: str
     targets: list[dict]
@@ -70,10 +81,12 @@ class SupervisorState(TypedDict, total=False):
     confirm_retry_count: int
     max_confirm_retries: int
     outputs: Annotated[dict, operator.or_]
+    worker_input: Optional[dict]
     final_answer: Optional[str]
     messages: Annotated[list[AnyMessage], add_messages]
     intent_classification: str
     intent_reason: str
+    intent_analysis: Optional[dict]
 
 
 class WorkerState(TypedDict, total=False):
