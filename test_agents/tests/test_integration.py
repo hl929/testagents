@@ -169,7 +169,20 @@ def test_full_pipeline_mocked():
     """Test the complete supervisor pipeline with mocks for all external dependencies"""
     # Mock intent classifier LLM response
     mock_classifier_response = MagicMock()
-    mock_classifier_response.content = '{"classification": "relevant", "reason": "明确需求"}'
+    mock_classifier_response.content = json.dumps({
+        "classification": "relevant",
+        "reason": "明确需求",
+        "extracted": {
+            "goal": "测试订单模块",
+            "modules": ["订单"],
+            "source_commit": "",
+            "target_commit": "",
+            "needs_code_analysis": True,
+            "needs_case_review": True,
+            "test_cases_provided": False,
+            "missing_info": ["commit 范围"],
+        },
+    }, ensure_ascii=False)
 
     # Mock planner LLM response (now via llm.invoke, not with_structured_output)
     plan_json = json.dumps({
@@ -297,7 +310,20 @@ def test_ambiguous_request_gets_clarification():
 def test_relevant_request_goes_full_pipeline():
     """End-to-end: relevant request should still go through full plan-and-solve flow"""
     mock_classifier_response = MagicMock()
-    mock_classifier_response.content = '{"classification": "relevant", "reason": "明确需求"}'
+    mock_classifier_response.content = json.dumps({
+        "classification": "relevant",
+        "reason": "明确需求",
+        "extracted": {
+            "goal": "分析订单模块代码变更",
+            "modules": ["订单"],
+            "source_commit": "",
+            "target_commit": "",
+            "needs_code_analysis": True,
+            "needs_case_review": False,
+            "test_cases_provided": False,
+            "missing_info": ["commit 范围"],
+        },
+    }, ensure_ascii=False)
 
     plan_json = json.dumps({
         "intent": "测试订单模块",

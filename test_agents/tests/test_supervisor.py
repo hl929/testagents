@@ -65,6 +65,13 @@ def test_supervisor_state_has_intent_fields():
     assert state["intent_reason"] == "用户仅打招呼"
 
 
+def test_build_initial_state_includes_intent_analysis():
+    from test_agents.main import _build_initial_state
+    state = _build_initial_state("测试请求")
+    assert "intent_analysis" in state
+    assert state["intent_analysis"] is None
+
+
 class TestRouteFromConfirm:
     def test_confirmed_dispatches(self):
         state: SupervisorState = {"plan": {"confirmed": True, "intent": "test", "steps": []}}

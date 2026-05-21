@@ -53,6 +53,7 @@ def _build_initial_state(user_request: str) -> dict:
         "messages": [],
         "intent_classification": "",
         "intent_reason": "",
+        "intent_analysis": None,
     }
 
 
