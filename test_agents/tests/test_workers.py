@@ -285,3 +285,21 @@ class TestParseReviewResults:
 
     def test_parse_empty(self):
         assert _parse_review_results("") == []
+
+
+from test_agents.tools.base import ToolRegistry
+
+
+class TestCodeAnalyzerToolBinding:
+    def test_code_analyzer_tools_include_fs_tools(self):
+        """After registration, code_analyzer binds claude_cli + 4 fs tools."""
+        # Importing the module triggers __init_subclass__ registration
+        from test_agents.tools.fs.read_file import ReadFileTool
+        from test_agents.tools.fs.list_dir import ListDirTool
+        from test_agents.tools.fs.grep import GrepTool
+        from test_agents.tools.fs.glob import GlobTool
+
+        names = ["claude_cli", "read_file", "list_dir", "grep", "glob"]
+        tools = ToolRegistry.get_tools_by_names(names)
+        assert len(tools) == 5
+        assert [t.name for t in tools] == names

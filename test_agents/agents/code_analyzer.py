@@ -5,7 +5,9 @@ from test_agents.graph.state import SupervisorState
 from test_agents.tools.base import ToolRegistry
 
 
-_code_analyzer_tools = ToolRegistry.get_tools_by_names(["claude_cli"])
+_code_analyzer_tools = ToolRegistry.get_tools_by_names(
+    ["claude_cli", "read_file", "list_dir", "grep", "glob"]
+)
 code_analyzer_graph = None
 
 
