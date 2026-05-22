@@ -35,7 +35,7 @@ class GlobTool(TestAgentTool):
         if not os.path.isabs(path):
             return f"错误: path 必须是绝对路径，收到: {path}"
 
-        args = ["--files", "--glob", pattern, path]
+        args = ["--files", "--glob", pattern, "--", path]
         try:
             rc, out, err = run_rg(args)
         except RgNotInstalled as e:
@@ -45,6 +45,8 @@ class GlobTool(TestAgentTool):
         except Exception as e:
             return f"错误: 工具执行失败 - {e!r}"
 
+        if rc == 1:
+            return "未找到匹配文件"
         if rc >= 2:
             return f"错误: ripgrep 退出码 {rc} - {err.strip() or '(no stderr)'}"
 

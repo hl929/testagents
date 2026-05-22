@@ -1,6 +1,6 @@
 """Tests for test_agents.tools.fs"""
+import os
 import shutil
-import time
 import pytest
 
 from test_agents.tools.fs._rg import run_rg, RgNotInstalled
@@ -230,9 +230,11 @@ class TestGlobTool:
     def test_glob_sorts_by_mtime_desc(self, tmp_path):
         old = tmp_path / "old.py"
         old.write_text("x")
-        time.sleep(0.05)
         new = tmp_path / "new.py"
         new.write_text("x")
+        # Explicit mtimes — independent of filesystem granularity
+        os.utime(old, (1_000_000, 1_000_000))
+        os.utime(new, (2_000_000, 2_000_000))
         out = GlobTool()._run(pattern="*.py", path=str(tmp_path))
         lines = [l for l in out.splitlines() if l.strip()]
         assert lines[0].endswith("new.py")
