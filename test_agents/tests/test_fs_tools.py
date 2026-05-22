@@ -3,6 +3,7 @@ import shutil
 import pytest
 
 from test_agents.tools.fs._rg import run_rg, RgNotInstalled
+from test_agents.tools.fs.list_dir import ListDirTool
 from test_agents.tools.fs.read_file import ReadFileTool
 
 
@@ -83,3 +84,63 @@ class TestReadFileTool:
         out = ReadFileTool()._run(file_path=str(p))
         assert "⚠️" in out
         assert "文件过大" in out
+
+
+class TestListDirTool:
+    def test_lists_depth_1(self, tmp_path):
+        (tmp_path / "a.txt").write_text("hi")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "b.txt").write_text("inner")
+        out = ListDirTool()._run(path=str(tmp_path), depth=1)
+        assert "a.txt" in out
+        assert "sub/" in out
+        assert "b.txt" not in out
+
+    def test_lists_depth_3(self, tmp_path):
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "b.txt").write_text("inner")
+        out = ListDirTool()._run(path=str(tmp_path), depth=3)
+        assert "sub/" in out
+        assert "b.txt" in out
+
+    def test_skips_noise_dirs(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "config").write_text("x")
+        (tmp_path / "__pycache__").mkdir()
+        (tmp_path / "node_modules").mkdir()
+        (tmp_path / ".venv").mkdir()
+        (tmp_path / "real.py").write_text("y")
+        out = ListDirTool()._run(path=str(tmp_path), depth=3, show_hidden=True)
+        assert "real.py" in out
+        assert ".git/" not in out
+        assert "__pycache__/" not in out
+        assert "node_modules/" not in out
+        assert ".venv/" not in out
+
+    def test_hidden_files_default_hidden(self, tmp_path):
+        (tmp_path / ".hidden").write_text("x")
+        (tmp_path / "visible.txt").write_text("y")
+        out = ListDirTool()._run(path=str(tmp_path))
+        assert "visible.txt" in out
+        assert ".hidden" not in out
+
+    def test_hidden_files_shown_when_requested(self, tmp_path):
+        (tmp_path / ".hidden").write_text("x")
+        out = ListDirTool()._run(path=str(tmp_path), show_hidden=True)
+        assert ".hidden" in out
+
+    def test_rejects_nonexistent(self, tmp_path):
+        out = ListDirTool()._run(path=str(tmp_path / "nope"))
+        assert "错误" in out
+
+    def test_rejects_relative_path(self):
+        out = ListDirTool()._run(path="./relative")
+        assert "错误" in out
+        assert "绝对路径" in out
+
+    def test_truncates_at_500_entries(self, tmp_path):
+        for i in range(600):
+            (tmp_path / f"f{i:03}.txt").write_text("x")
+        out = ListDirTool()._run(path=str(tmp_path), depth=1)
+        assert out.count("\n") <= 510  # 500 + 截断提示
+        assert "截断" in out or "⚠️" in out
