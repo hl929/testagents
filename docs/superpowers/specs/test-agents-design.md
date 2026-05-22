@@ -93,6 +93,14 @@ test_agents/
 │   ├── worker_base.py           # Worker 子图构建工厂（ReAct + 反思）
 │   ├── code_analyzer.py         # 代码分析智能体（Worker 子图定义 + 工具绑定）
 │   └── case_reviewer.py         # 用例评审智能体（Worker 子图定义 + 工具绑定）
+├── observability/               # 可观测性子包（详见 §13）
+│   ├── __init__.py              # 导出 setup_logging / new_trace / flush_metrics / make_run_config / ObservabilityCallback
+│   ├── context.py               # ContextVar(trace_id) + new_trace / get_trace_id
+│   ├── logger.py                # setup_logging：注册 Filter/Handler，幂等
+│   ├── filters.py               # ContextInjectFilter：注入 trace_id 到 LogRecord
+│   ├── handlers.py              # JsonlMultiHandler：主日志 + per-trace 双写
+│   ├── callback.py              # ObservabilityCallback(BaseCallbackHandler)：拦截 node/llm/tool 事件
+│   └── metrics.py               # MetricsCollector：trace 维度聚合，flush 到 metrics.jsonl
 ├── tools/                       # 公共工具层
 │   ├── __init__.py
 │   ├── base.py                  # TestAgentTool 基类 + ToolRegistry 自动注册表
@@ -121,6 +129,10 @@ test_agents/
 ├── main.py                      # 入口（改为接收 user_request + 直接调用路由）
 ├── data/                            # 运行时数据
 │   └── reflection_experience.md      # 经验记录文档（运行时生成）
+├── logs/                             # 可观测性输出（详见 §13）
+│   ├── app-YYYY-MM-DD.jsonl          # 主日志，按天滚动
+│   ├── metrics.jsonl                 # 每次执行追加一行 summary
+│   └── traces/<trace_id>.jsonl       # 每个 trace 一个文件
 ```
 
 ## 3. 状态设计
@@ -1223,6 +1235,8 @@ Claude CLI 需单独安装并配置到 PATH 中。
 
 未安装时 `grep` / `glob` 会返回带平台命令提示的友好错误，不影响 `read_file` / `list_dir` 与其他工具的正常使用。
 
+**可观测性（observability）零新增依赖：** 基于 Python 标准库 `logging` + `contextvars` + LangGraph 自带 `langchain_core.callbacks.BaseCallbackHandler` 实现，requirements.txt 不变。详见 §13。
+
 ## 11. 与之前版本的关键差异
 
 | 维度        | v1（Supervisor 模式） | v2（Plan-and-Solve）      | v3（Plan-and-Solve + Reflection）    |
@@ -1240,6 +1254,7 @@ Claude CLI 需单独安装并配置到 PATH 中。
 | 步骤间数据传递   | 隐式                | 显式 input\_mapping + ${} | 显式 input\_mapping + ${outputs.xxx} |
 | 结果汇聚      | 固定字段（硬编码）         | 固定字段（硬编码）               | 通用 `outputs` 字典（配置驱动）              |
 | code\_analyzer 工具 | 仅 `claude_cli` | 仅 `claude_cli` | `claude_cli` + 本地 fs 工具（`read_file` / `list_dir` / `grep` / `glob`，后两者基于 ripgrep），支持跨仓库源码探索 |
+| 可观测性 | 无 | 无 | 自建 logging + LangGraph callback 拦截，零新增依赖，详见 §13 |
 
 ## 12. 反思与经验机制详解
 
@@ -1274,3 +1289,149 @@ Claude CLI 需单独安装并配置到 PATH 中。
 | 当前使用 | 只记录，不引用                        |
 | 未来扩展 | planner 读取经验辅助规划               |
 
+
+## 13. 可观测性（Observability）
+
+为 Test Agents v3 建立**自建、内网友好、零新增依赖**的可观测体系。完整设计与所有 finding 落点见 `docs/superpowers/specs/2026-05-22-observability-design.md`（取代已搁置的 `2026-05-20-langgraph-tracing-design.md`）。
+
+### 13.1 目标
+
+1. **定位问题** —— worker 报错、reflect 拒绝、计划反复 replan 时能快速追到根因
+2. **性能/成本分析** —— 每个 LLM 调用耗时与 token、claude_cli 调用时长、worker 总耗时
+3. **行为可解释性** —— 完整复盘 supervisor 的决策、worker 的工具调用序列
+
+### 13.2 约束
+
+- 部署在内网，**禁止任何数据出网**（排除 LangSmith 等 SaaS）
+- **不引入新基础设施**（排除自托管 LangFuse、Postgres、Prometheus）
+- 不引入新 Python 第三方依赖，全部基于标准库 + LangGraph 自带 callback
+
+### 13.3 总体架构
+
+```
+main.py: run_test_agents(user_request)
+  ├─ setup_logging()                        ← 模块导入时一次
+  └─ return _with_observability(target_func, user_request, kind)
+       ├─ new_trace(user_request)           ← 生成 trace_id，存入 ContextVar
+       ├─ result = target_func(make_run_config())
+       │            （config 携带 ObservabilityCallback）
+       ├─ flush_metrics(status, final_answer_length)  ← 追加 metrics.jsonl
+       └─ close_trace_writer()              ← 关闭 per-trace 文件 + 清理跨事件 dict
+              ↓
+   LangGraph 引擎执行（自动触发 callback，业务代码改动 0 处）
+              ↓
+   ObservabilityCallback（BaseCallbackHandler 子类）
+     ├─ on_chain_start/end/error   → node.enter / node.exit + replan 推断
+     ├─ on_chat_model_start/end    → llm.call + tokens（主路径）
+     ├─ on_llm_start/end           → llm.call（兼容 completion 模型）
+     └─ on_tool_start/end/error    → tool.call + duration_ms
+              ↓
+   JsonlMultiHandler
+     ├─ TimedRotatingFileHandler → logs/app-YYYY-MM-DD.jsonl
+     └─ per-trace writer (LRU 64) → logs/traces/<trace_id>.jsonl
+              ↓
+   trace 结束：MetricsCollector.flush(trace_id) → logs/metrics.jsonl 追加一行
+```
+
+### 13.4 业务代码改动量
+
+| 文件 | 改动 |
+|---|---|
+| `test_agents/main.py` | 模块导入时调用 `setup_logging()`；抽出 `_with_observability(target_func, user_request, kind)` 包装函数，`_run_supervisor` 与 `_run_direct_worker` 都通过它调用，保证两条路径都有 trace_id |
+| `test_agents/config.py` | 新增 6 个环境变量：`TEST_AGENTS_LOG_LEVEL`（默认 `INFO`，含 `OFF` 总开关）、`TEST_AGENTS_LOG_DIR`（默认 `logs/`）、`TEST_AGENTS_LOG_TRACE_FILES`（默认 `true`）、`TEST_AGENTS_LOG_TRACES_KEEP`（默认 `1000`）、`TEST_AGENTS_LOG_RETAIN_DAYS`（默认 `30`）、`TEST_AGENTS_LOG_TRACE_HANDLES`（默认 `64`） |
+| `test_agents/agents/supervisor.py` / `worker_base.py` | **0 处改动**。callback 自动拦截每个节点和 `llm.invoke` |
+| `test_agents/tools/base.py` 及全部子类 | **0 处改动**。callback 自动拦截每次工具调用 |
+| `test_agents/graph/builder.py` | **0 处改动**。callback 通过 `app.invoke(state, config={"callbacks": [...]} )` 注入，编译时不绑定 |
+
+### 13.5 trace_id / span_id 传递
+
+- **`trace_id`**：`_with_observability` 入口 `new_trace(user_request)` 生成（格式 `tr_<8 字符 hex>`），存入 `trace_id_var: ContextVar[str]`。confirm_plan interrupt 跨多次 `app.invoke` 时，`MetricsCollector` 是全局 dict，状态正确累积。
+- **`span_id`**：由 `ObservabilityCallback._spans: dict[UUID, str]` 在 enter 事件时生成。`parent_span_id` 通过 `parent_run_id` 查同一个 dict。不使用 `ContextVar` 传递 span_id。
+- **dict 生命周期**：所有出口（on_chain_end/error、on_chat_model_end、on_llm_end/error、on_tool_end/error）都 `pop(run_id, None)`；`close_trace_writer()` 额外清 `_last_node_per_trace[trace_id]`。
+- 当前实现**不支持多线程并发执行**、**不支持嵌套 `new_trace`**。
+
+### 13.6 日志级别与总开关
+
+| 级别 | 节点 enter/exit | LLM 调用 | 工具调用 | state 快照 |
+|---|---|---|---|---|
+| `OFF` | `setup_logging` 不注册 Handler，`make_run_config()` 返回 `{"callbacks": [], ...}`。整套观测体系彻底失活 | — | — | — |
+| `INFO`（默认） | ✓ + 摘要 | ✓ + tokens + 耗时 | ✓ + 摘要 + 耗时 | ✗ |
+| `DEBUG` | ✓ + 摘要 | ✓ + prompt/response 全文（2KB） | ✓ + input/output 全文（2KB） | ✗ |
+| `TRACE`（自定义=5） | ✓ + state 快照 | ✓ + state 快照 | 同 DEBUG | ✓ |
+
+### 13.7 输出文件
+
+```
+logs/
+  app-2026-05-22.jsonl       # 主日志（按天滚动，默认保留 30 天）
+  metrics.jsonl              # 每次执行追加一行 summary（不滚动）
+  traces/
+    tr_8a3f2c1d.jsonl        # per-trace 完整事件序列
+    ...
+```
+
+清理：
+
+- 主日志：`TimedRotatingFileHandler(when='midnight', backupCount=TEST_AGENTS_LOG_RETAIN_DAYS)`
+- per-trace 文件：`setup_logging()` 启动时按 mtime 降序保留最新 `TEST_AGENTS_LOG_TRACES_KEEP` 份
+- per-trace 句柄：LRU 容量 `TEST_AGENTS_LOG_TRACE_HANDLES`
+- `metrics.jsonl`：不自动清理
+
+### 13.8 日志行格式（JSON Lines）
+
+```json
+{
+  "ts": "2026-05-22T10:30:45.123Z",
+  "level": "INFO",
+  "trace_id": "tr_8a3f2c1d",
+  "span_id": "sp_b21c4a90",
+  "parent_span_id": "sp_a1f0e234",
+  "event": "node.enter|node.exit|llm.call|tool.call|error|callback.failed",
+  "node": "planner", "tool": "claude_cli",
+  "duration_ms": 1234, "status": "ok|error",
+  "model": "gpt-4o", "tokens": {"prompt": 123, "completion": 45, "total": 168},
+  "input_summary": "...", "output_summary": "...",
+  "error": {"type": "TimeoutError", "message": "...", "traceback": "..."}
+}
+```
+
+- `input_summary` / `output_summary`：截断到前 200 字符（INFO 起）
+- `input_full` / `output_full`：截断到 2000 字符（DEBUG/TRACE 才出现）
+- 不可序列化对象 → `str(obj)` + `___unserializable___: true` 标记
+- 序列化策略按事件源类型分发（dict / list[BaseMessage] / str 各自处理）
+
+### 13.9 metrics.jsonl 行格式
+
+```json
+{
+  "trace_id": "tr_8a3f2c1d",
+  "ts_start": "...", "ts_end": "...", "duration_ms": 27333,
+  "user_request": "分析订单模块代码变更",
+  "status": "ok|error|aborted",
+  "node_count": 7, "llm_call_count": 5, "tool_call_count": 12,
+  "replan_count": 0, "final_answer_length": 1024,
+  "error": null
+}
+```
+
+**status 三态**：`ok` 流程完成并有 final_answer；`error` 异常抛出（含 KeyboardInterrupt）；`aborted` 流程完成但无 final_answer（confirm_retry 超限）。
+
+### 13.10 错误处理原则
+
+**可观测系统的故障绝不允许影响业务执行。** 所有 callback 方法包 try/except、写一条 `event: callback.failed` 后吞掉；JsonlMultiHandler 写盘失败降级 `sys.__stderr__`；MetricsCollector flush 失败静默；trace_id 未 set 时主日志正常写、不写 per-trace 文件。详细错误矩阵见独立 spec §12。
+
+### 13.11 与 §7 错误处理的关系
+
+§7 表只描述**业务层**错误，不重复 observability 错误处理（独立 spec §12 全覆盖）。一条规则：**observability 自身的任何故障对业务都是不可感知的**，所以不会出现在 §7 的"用户感知"列。
+
+### 13.12 非目标（YAGNI）
+
+- 不做 Prometheus / OpenTelemetry 指标导出
+- 不做实时 Web UI（如需可视化未来再加 LangFuse 自托管）
+- 不做日志加密、不做脱敏
+- 不做集中式日志收集（ELK / Loki）
+- 不做告警 / 通知机制
+- 不做异步 QueueHandler
+- 不支持多线程并发执行
+- 不在 `build_graph` 默认绑定 callback
+- 不支持嵌套 `new_trace`
