@@ -34,5 +34,13 @@ class Config:
         os.path.join(os.path.dirname(__file__), "data", "reflection_experience.md"),
     )
 
+    # 可观测体系配置（spec §6）
+    LOG_LEVEL: str = os.getenv("TEST_AGENTS_LOG_LEVEL", "INFO")
+    LOG_DIR: str = os.getenv("TEST_AGENTS_LOG_DIR", "logs")
+    LOG_TRACE_FILES: bool = os.getenv("TEST_AGENTS_LOG_TRACE_FILES", "true").lower() == "true"
+    LOG_TRACES_KEEP: int = int(os.getenv("TEST_AGENTS_LOG_TRACES_KEEP", "1000"))
+    LOG_RETAIN_DAYS: int = int(os.getenv("TEST_AGENTS_LOG_RETAIN_DAYS", "30"))
+    LOG_TRACE_HANDLES: int = int(os.getenv("TEST_AGENTS_LOG_TRACE_HANDLES", "64"))
+
 
 config = Config()
