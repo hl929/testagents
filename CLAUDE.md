@@ -167,3 +167,13 @@ Key routing rules:
 - Ship/deploy/PR → invoke /ship or /land-and-deploy
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
+
+## Observability
+
+可观测系统（spec: `docs/superpowers/specs/2026-05-22-observability-design.md`）。
+所有日志走 `test_agents/observability/`，业务代码 0 改动（callback 自动拦截）。
+
+- 日志文件：`logs/app-YYYY-MM-DD.jsonl`（按天滚动）+ `logs/traces/<trace_id>.jsonl`（单次执行）+ `logs/metrics.jsonl`（汇总）
+- 控制环境变量：`TEST_AGENTS_LOG_LEVEL=OFF|INFO|DEBUG|TRACE`（默认 INFO）
+- 关闭整套观测：`TEST_AGENTS_LOG_LEVEL=OFF` → 零开销
+- 查询示例见 spec §15 "日志查询 Cheatsheet"
