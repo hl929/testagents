@@ -58,7 +58,7 @@
 | `observability/context.py` | 定义 `trace_id_var`、`span_id_var`（`ContextVar`），工具函数 `new_trace()` / `new_span()` / `get_trace_id()` / `get_span_id()` |
 | `observability/logger.py` | `setup_logging()` 入口：根据 `TEST_AGENTS_LOG_LEVEL` 注册 Filter 和 Handler；定义自定义级别 `TRACE=5` |
 | `observability/filters.py` | `ContextInjectFilter`：在 `filter(record)` 中从 ContextVar 读取 trace_id / span_id 注入到 `LogRecord` |
-| `observability/handlers.py` | `JsonlMultiHandler(logging.Handler)`：emit 时序列化 LogRecord → JSON，同时写主日志（`TimedRotatingFileHandler` 风格按天滚动）和 per-trace 文件（按 record.trace_id 路由） |
+| `observability/handlers.py` | `JsonlMultiHandler(logging.Handler)`：emit 时序列化 LogRecord → JSON，同时分发到两个底层 writer —— 主日志用标准库 `logging.handlers.TimedRotatingFileHandler` 按天滚动，per-trace 文件按 `record.trace_id` 路由到 `traces/<trace_id>.jsonl`（首次见到 trace_id 时打开文件句柄并缓存，trace 结束时关闭） |
 | `observability/decorators.py` | `@log_node(name)`（节点装饰器，记 enter/exit + 耗时 + 异常）、`@log_tool`（工具装饰器，记 input/output + 耗时 + 异常）、`log_llm_call(llm, messages, **kwargs)`（LLM 调用包装，记 model / tokens / 耗时） |
 | `observability/metrics.py` | `MetricsCollector`：每个 trace 维护一份累计计数（node_count / llm_call_count / tool_call_count / replan_count / ts_start / status），`flush_metrics()` 在 trace 结束追加一行到 `metrics.jsonl` |
 
@@ -68,9 +68,9 @@
 |---|---|
 | `test_agents/main.py` | 模块导入后调用 `setup_logging()`；`run_test_agents()` 每次请求入口调用 `new_trace(user_request=...)` 并用 `try/finally` 保证 `flush_metrics(status=...)` 一定执行 |
 | `test_agents/config.py` | 新增 `TEST_AGENTS_LOG_LEVEL`(默认 `INFO`)、`TEST_AGENTS_LOG_DIR`(默认 `logs/`)、`TEST_AGENTS_LOG_TRACE_FILES`(默认 `true`)、`TEST_AGENTS_LOG_TRACES_KEEP`(默认 `1000`)、`TEST_AGENTS_LOG_RETAIN_DAYS`(默认 `30`) |
-| `test_agents/agents/supervisor.py` | 每个 supervisor 节点函数（planner / confirm_plan / dispatch / reflect / synthesize / save_experience）用 `@log_node("planner")` 等装饰 |
-| `test_agents/agents/worker_base.py` | 子图的 `agent` / `reflect` 节点函数 `@log_node(...)` 装饰；`reflect` 抛出 replan 决策时通过 `MetricsCollector` 累计 `replan_count` |
-| `test_agents/tools/base.py` | `TestAgentTool._run` 包一层日志切面（复用 `@log_tool` 思路）；由于所有工具都继承基类，子类（`ClaudeCliTool` / `ReadFileTool` / `GrepTool` / `GlobTool` / `ListDirTool` / `TestCaseParserTool` / `BusinessKnowledgeTool`）自动获得工具日志，**不需要修改任何工具子类代码** |
+| `test_agents/agents/supervisor.py` | 给以下节点函数加装饰器：`planner` → `@log_node("planner")`、`dispatch` → `@log_node("dispatch")`、`reflect` → `@log_node("reflect")`、`synthesize` → `@log_node("synthesize")`、`save_experience` → `@log_node("save_experience")`。**`confirm_plan` 不装饰**，因其调用 `langgraph.types.interrupt` 会抛 `GraphInterrupt`，由 `main.py` 入口外层用专门的 `log_confirm_plan()` 包装函数处理 interrupt 语义（见 §6） |
+| `test_agents/agents/worker_base.py` | 子图节点 `agent` → `@log_node("worker.agent")`、`reflect` → `@log_node("worker.reflect")`；`route_from_reflect` 检测到 replan 时调用 `metrics.incr("replan_count")` |
+| `test_agents/tools/base.py` | `TestAgentTool._run` 直接在基类内联实现日志切面（与 `decorators.py` 中的 `@log_tool` 共享同一份核心实现 `_log_tool_invocation(name, args, fn)`，避免代码重复）；由于所有工具都继承基类，子类（`ClaudeCliTool` / `ReadFileTool` / `GrepTool` / `GlobTool` / `ListDirTool` / `TestCaseParserTool` / `BusinessKnowledgeTool`）自动获得工具日志，**不需要修改任何工具子类代码** |
 | LLM 调用 | 在 `supervisor.py` / `worker_base.py` 所有 `get_llm().invoke(...)` / `.with_structured_output(...).invoke(...)` 调用处改为 `log_llm_call(llm_or_runnable, messages, model=...)`；该包装函数内部 catch 异常并记录后重新抛出，业务语义不变 |
 
 ## 6. trace_id / span_id 传递机制
@@ -106,6 +106,23 @@
       return deco
   ```
 - ContextVar 在 LangGraph 同步执行下天然安全；若未来切到 async，`asyncio.Task` 创建时会自动复制 ContextVar 快照，仍然安全。
+
+**关于 `GraphInterrupt` 的特殊处理**：
+
+`langgraph.types.interrupt` 通过抛出 `GraphInterrupt` 异常实现暂停。装饰器中要识别这一异常并视为"正常控制流"，不要记 error、不要置 metrics.status=error：
+
+```python
+from langgraph.errors import GraphInterrupt
+
+except GraphInterrupt:
+    logger.info("node.pause", extra={"event": "node.pause", "node": name,
+                                     "duration_ms": ..., "status": "paused"})
+    raise  # 不计为错误，但要让 LangGraph 继续处理
+except Exception as e:
+    ...  # 原有错误处理
+```
+
+`confirm_plan` 节点除外（不装饰），因为它是 100% 走 interrupt 的节点，单独的"暂停"事件在 `main.py` 处理 interrupt 恢复时由 `log_confirm_plan()` 显式记录一次更有语义。
 
 ## 7. 日志格式（每条 JSON Line）
 
