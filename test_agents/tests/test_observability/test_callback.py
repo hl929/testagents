@@ -139,6 +139,63 @@ def test_chat_model_and_llm_both_implemented():
     assert hasattr(cb, "on_llm_error")
 
 
+def test_debug_level_emits_full_fields(caplog, monkeypatch, tmp_path):
+    """Spec §9: DEBUG level adds input_full/output_full on top of summary."""
+    import logging as _logging
+    metrics = MetricsCollector(metrics_path=str(tmp_path / "m.jsonl"))
+    monkeypatch.setattr("test_agents.observability.callback.metrics", metrics)
+    new_trace("t"); metrics.new_trace("t", user_request="x")
+    monkeypatch.setattr("test_agents.observability.callback.get_trace_id",
+                        lambda: "t")
+
+    cb = ObservabilityCallback()
+    rid = _uuid()
+    cb_logger = _logging.getLogger("test_agents.observability.callback")
+    # Force callback logger to DEBUG so isEnabledFor(DEBUG) returns True
+    orig_level = cb_logger.level
+    cb_logger.setLevel(_logging.DEBUG)
+    try:
+        with caplog.at_level(_logging.DEBUG, logger="test_agents.observability.callback"):
+            cb.on_chain_start({}, {"big": "x" * 5000}, run_id=rid,
+                              metadata={"langgraph_node": "planner"})
+        records = [r for r in caplog.records if getattr(r, "event", "") == "node.enter"]
+        assert len(records) == 1
+        # At DEBUG, input_full present and capped at 2000 chars (per spec §8)
+        assert hasattr(records[0], "input_full")
+        assert len(records[0].input_full) <= 2000
+        # input_summary still present and capped at 200
+        assert hasattr(records[0], "input_summary")
+        assert len(records[0].input_summary) <= 200
+    finally:
+        cb_logger.setLevel(orig_level)
+
+
+def test_info_level_omits_full_fields(caplog, monkeypatch, tmp_path):
+    """Sanity: INFO level produces summary but NOT input_full."""
+    import logging as _logging
+    metrics = MetricsCollector(metrics_path=str(tmp_path / "m.jsonl"))
+    monkeypatch.setattr("test_agents.observability.callback.metrics", metrics)
+    new_trace("t"); metrics.new_trace("t", user_request="x")
+    monkeypatch.setattr("test_agents.observability.callback.get_trace_id",
+                        lambda: "t")
+
+    cb = ObservabilityCallback()
+    rid = _uuid()
+    cb_logger = _logging.getLogger("test_agents.observability.callback")
+    orig_level = cb_logger.level
+    cb_logger.setLevel(_logging.INFO)
+    try:
+        with caplog.at_level(_logging.INFO, logger="test_agents.observability.callback"):
+            cb.on_chain_start({}, {"big": "x" * 5000}, run_id=rid,
+                              metadata={"langgraph_node": "planner"})
+        records = [r for r in caplog.records if getattr(r, "event", "") == "node.enter"]
+        assert len(records) == 1
+        # At INFO, input_full must NOT be set (or be absent)
+        assert not hasattr(records[0], "input_full") or records[0].input_full is None
+    finally:
+        cb_logger.setLevel(orig_level)
+
+
 def test_run_id_cleanup_on_all_eight_exits(monkeypatch, tmp_path):
     """Eng Finding 4.3: _spans dict has no leftovers after any end/error."""
     metrics = MetricsCollector(metrics_path=str(tmp_path / "m.jsonl"))

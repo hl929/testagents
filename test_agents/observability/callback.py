@@ -41,13 +41,16 @@ class ObservabilityCallback(BaseCallbackHandler):
             self._spans[run_id] = {
                 "span_id": span_id, "node": node_name, "t0": perf_counter(),
             }
-            logger.info("node.enter", extra={
+            extra = {
                 "event": "node.enter",
                 "node": node_name,
                 "span_id": span_id,
                 "parent_span_id": parent_span,
                 "input_summary": summarize(inputs, kind="dict"),
-            })
+            }
+            if logger.isEnabledFor(logging.DEBUG):
+                extra["input_full"] = full(inputs, kind="dict")
+            logger.info("node.enter", extra=extra)
         except Exception:
             logger.warning("callback.failed", extra={
                 "event": "callback.failed",
@@ -69,14 +72,17 @@ class ObservabilityCallback(BaseCallbackHandler):
                 self._last_node_per_trace[tid] = entry["node"]
             if metrics and tid:
                 metrics.incr(tid, "node_count")
-            logger.info("node.exit", extra={
+            extra = {
                 "event": "node.exit",
                 "node": entry["node"],
                 "span_id": entry["span_id"],
                 "duration_ms": int((perf_counter() - entry["t0"]) * 1000),
                 "status": "ok",
                 "output_summary": summarize(outputs, kind="dict"),
-            })
+            }
+            if logger.isEnabledFor(logging.DEBUG):
+                extra["output_full"] = full(outputs, kind="dict")
+            logger.info("node.exit", extra=extra)
         except Exception:
             logger.warning("callback.failed", extra={
                 "event": "callback.failed",
@@ -124,13 +130,16 @@ class ObservabilityCallback(BaseCallbackHandler):
                 (serialized or {}).get("kwargs", {}).get("model_name")
                 or ((serialized or {}).get("id") or [None])[-1]
             )
-            logger.info("llm.call", extra={
+            extra = {
                 "event": "llm.call",
                 "phase": "start",
                 "span_id": span_id,
                 "model": model,
                 "input_summary": summarize(payload, kind=kind),
-            })
+            }
+            if logger.isEnabledFor(logging.DEBUG):
+                extra["input_full"] = full(payload, kind=kind)
+            logger.info("llm.call", extra=extra)
         except Exception:
             logger.warning("callback.failed", extra={
                 "event": "callback.failed", "callback": "_on_llm_start",
@@ -202,11 +211,14 @@ class ObservabilityCallback(BaseCallbackHandler):
             t0 = perf_counter()
             tool = (serialized or {}).get("name") or "_tool"
             self._spans[run_id] = {"span_id": span_id, "node": tool, "t0": t0}
-            logger.info("tool.call", extra={
+            extra = {
                 "event": "tool.call", "phase": "start",
                 "span_id": span_id, "tool": tool,
                 "input_summary": summarize(input_str, kind="str"),
-            })
+            }
+            if logger.isEnabledFor(logging.DEBUG):
+                extra["input_full"] = full(input_str, kind="str")
+            logger.info("tool.call", extra=extra)
         except Exception:
             logger.warning("callback.failed", extra={
                 "event": "callback.failed", "callback": "on_tool_start",
@@ -221,13 +233,16 @@ class ObservabilityCallback(BaseCallbackHandler):
             tid = get_trace_id()
             if metrics and tid:
                 metrics.incr(tid, "tool_call_count")
-            logger.info("tool.call", extra={
+            extra = {
                 "event": "tool.call", "phase": "end",
                 "span_id": entry["span_id"], "tool": entry["node"],
                 "duration_ms": int((perf_counter() - entry["t0"]) * 1000),
                 "status": "ok",
                 "output_summary": summarize(output, kind="str"),
-            })
+            }
+            if logger.isEnabledFor(logging.DEBUG):
+                extra["output_full"] = full(output, kind="str")
+            logger.info("tool.call", extra=extra)
         except Exception:
             logger.warning("callback.failed", extra={
                 "event": "callback.failed", "callback": "on_tool_end",
