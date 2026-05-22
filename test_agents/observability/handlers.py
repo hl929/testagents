@@ -199,9 +199,10 @@ class JsonlMultiHandler(logging.Handler):
 
 
 def _iso_now() -> str:
-    from datetime import timezone
-    now = datetime.now(timezone.utc)
-    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+    now = datetime.now().astimezone()
+    base = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}"
+    tz = now.strftime("%z")
+    return f"{base}{tz[:3]}:{tz[3:]}" if tz else base
 
 
 # Stdlib LogRecord attrs we don't want to pass through to payload.
