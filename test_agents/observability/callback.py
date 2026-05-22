@@ -189,7 +189,10 @@ class ObservabilityCallback(BaseCallbackHandler):
                 "error": {"type": type(error).__name__, "message": str(error)[:500]},
             })
         except Exception:
-            pass
+            logger.warning("callback.failed", extra={
+                "event": "callback.failed", "callback": "_on_llm_error",
+                "error": traceback.format_exc()[:500],
+            })
 
     # ---- tool events ----
 
@@ -243,7 +246,10 @@ class ObservabilityCallback(BaseCallbackHandler):
                 "error": {"type": type(error).__name__, "message": str(error)[:500]},
             })
         except Exception:
-            pass
+            logger.warning("callback.failed", extra={
+                "event": "callback.failed", "callback": "on_tool_error",
+                "error": traceback.format_exc()[:500],
+            })
 
     # ---- trace teardown hook ----
 

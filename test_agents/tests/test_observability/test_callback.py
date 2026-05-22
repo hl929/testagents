@@ -135,9 +135,11 @@ def test_chat_model_and_llm_both_implemented():
     assert hasattr(cb, "on_llm_start")
     assert hasattr(cb, "on_chat_model_end")
     assert hasattr(cb, "on_llm_end")
+    assert hasattr(cb, "on_chat_model_error")
+    assert hasattr(cb, "on_llm_error")
 
 
-def test_run_id_cleanup_on_all_six_exits(monkeypatch, tmp_path):
+def test_run_id_cleanup_on_all_eight_exits(monkeypatch, tmp_path):
     """Eng Finding 4.3: _spans dict has no leftovers after any end/error."""
     metrics = MetricsCollector(metrics_path=str(tmp_path / "m.jsonl"))
     monkeypatch.setattr("test_agents.observability.callback.metrics", metrics)
@@ -145,12 +147,16 @@ def test_run_id_cleanup_on_all_six_exits(monkeypatch, tmp_path):
     monkeypatch.setattr("test_agents.observability.callback.get_trace_id",
                         lambda: "t")
     cb = ObservabilityCallback()
-    # 6 exits: chain_end, chain_error, chat_model_end, llm_end (alias),
-    # tool_end, tool_error
+    R = type("R", (), {})
+    # 8 exits: chain_end, chain_error, chat_model_end, llm_end,
+    # chat_model_error, llm_error, tool_end, tool_error
     for trigger in (
         lambda r: cb.on_chain_end({}, run_id=r),
         lambda r: cb.on_chain_error(Exception("x"), run_id=r),
-        lambda r: cb.on_chat_model_end(type("R", (), {})(), run_id=r),
+        lambda r: cb.on_chat_model_end(R(), run_id=r),
+        lambda r: cb.on_llm_end(R(), run_id=r),
+        lambda r: cb.on_chat_model_error(Exception("x"), run_id=r),
+        lambda r: cb.on_llm_error(Exception("x"), run_id=r),
         lambda r: cb.on_tool_end("out", run_id=r),
         lambda r: cb.on_tool_error(Exception("x"), run_id=r),
     ):
