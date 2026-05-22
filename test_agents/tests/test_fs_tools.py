@@ -3,6 +3,7 @@ import shutil
 import pytest
 
 from test_agents.tools.fs._rg import run_rg, RgNotInstalled
+from test_agents.tools.fs.read_file import ReadFileTool
 
 
 requires_rg = pytest.mark.skipif(
@@ -32,9 +33,6 @@ class TestRunRg:
         with pytest.raises(RgNotInstalled) as exc_info:
             run_rg(["foo", "."])
         assert "apt install ripgrep" in str(exc_info.value)
-
-
-from test_agents.tools.fs.read_file import ReadFileTool
 
 
 class TestReadFileTool:
