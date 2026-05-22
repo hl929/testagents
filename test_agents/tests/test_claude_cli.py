@@ -15,8 +15,9 @@ def test_claude_cli_tool_escapes_prompt():
         # 验证调用参数
         args = mock_run.call_args[0][0]
         assert args[0] == "claude"
-        assert args[1] == "-p"
-        assert args[2] == prompt
+        assert args[1] == "--dangerously-skip-permissions"
+        assert args[2] == "-p"
+        assert args[3] == prompt
 
 
 def test_claude_cli_tool_timeout():
