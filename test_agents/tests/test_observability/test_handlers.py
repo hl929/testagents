@@ -84,3 +84,54 @@ def test_write_failure_silent_degrade(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(h, "_write_line", boom)
     h.emit(_make_record(trace_id="tr_abc01234"))  # must not raise
     # Spec: degrade to sys.__stderr__, do not re-raise.
+
+
+def test_rollover_produces_correctly_dated_files(tmp_path, monkeypatch):
+    """spec §10: rotation produces app-YYYY-MM-DD.jsonl for both live and rotated."""
+    import logging
+    import re
+    from datetime import datetime
+    from unittest.mock import patch
+    from test_agents.observability.handlers import JsonlMultiHandler
+
+    # Freeze "today" to 2026-05-21 so the handler opens app-2026-05-21.jsonl.
+    day1 = datetime(2026, 5, 21, 10, 0, 0)
+    with patch("test_agents.observability.handlers.datetime") as mock_dt:
+        mock_dt.now.return_value = day1
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw) if a else day1
+        h = JsonlMultiHandler(log_dir=str(tmp_path), trace_handles=4, write_per_trace=False)
+
+    # Write one record on day 1.
+    rec = logging.LogRecord("t", logging.INFO, "f", 1, "day1", None, None)
+    rec.trace_id = None
+    h.emit(rec)
+
+    # Simulate midnight: patch datetime.now so doRollover sees day 2.
+    day2 = datetime(2026, 5, 22, 0, 5, 0)
+    with patch("test_agents.observability.handlers.datetime") as mock_dt:
+        mock_dt.now.return_value = day2
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw) if a else day2
+        h._main.doRollover()
+
+    # Write one record on day 2.
+    rec2 = logging.LogRecord("t", logging.INFO, "f", 1, "day2", None, None)
+    rec2.trace_id = None
+    h.emit(rec2)
+
+    h.close()
+
+    # Both files exist and match app-YYYY-MM-DD.jsonl pattern.
+    files = sorted(p.name for p in tmp_path.glob("app-*.jsonl"))
+    assert len(files) == 2, f"Expected 2 dated files, got {files}"
+    for f in files:
+        assert re.fullmatch(r"app-\d{4}-\d{2}-\d{2}\.jsonl", f), \
+            f"Filename {f} does not match app-YYYY-MM-DD.jsonl"
+    # No doubled-date filenames.
+    assert not any(re.search(r"\d{4}-\d{2}-\d{2}.*\d{4}-\d{2}-\d{2}", f) for f in files)
+    # Verify the day1 file has the day1 record and day2 file has day2.
+    day1_file = tmp_path / "app-2026-05-21.jsonl"
+    day2_file = tmp_path / "app-2026-05-22.jsonl"
+    assert day1_file.exists()
+    assert day2_file.exists()
+    assert "day1" in day1_file.read_text()
+    assert "day2" in day2_file.read_text()

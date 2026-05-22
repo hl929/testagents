@@ -8,7 +8,9 @@ Per spec §5 and §10. Failure modes per spec §12:
 """
 import json
 import logging
+import re
 import sys
+import time
 from collections import OrderedDict
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
@@ -16,6 +18,92 @@ from pathlib import Path
 from typing import IO
 
 from test_agents.observability.serializer import safe_json_dumps
+
+
+class _DailyJsonlHandler(TimedRotatingFileHandler):
+    """TimedRotatingFileHandler that names today's live file
+    ``app-YYYY-MM-DD.jsonl`` AND ensures rotated archives match the same
+    pattern (spec §10).
+
+    The stock ``TimedRotatingFileHandler`` keeps ``baseFilename`` pinned at
+    whatever was passed in at construction, so subsequent rollovers would
+    forever re-open the construction-day filename and produce
+    doubled-date archive names. We override ``doRollover`` to:
+      1. Rename the existing live file to its already-correctly-dated
+         archive name (a no-op since baseFilename already encodes the
+         old date).
+      2. Repoint ``baseFilename`` to ``app-<today>.jsonl`` and re-open.
+    """
+
+    _NAME_RE = re.compile(r"app-(\d{4}-\d{2}-\d{2})\.jsonl$")
+
+    def __init__(self, log_dir: Path, backup_count: int):
+        self._log_dir = log_dir
+        today = datetime.now().strftime("%Y-%m-%d")
+        live = log_dir / f"app-{today}.jsonl"
+        super().__init__(
+            filename=str(live),
+            when="midnight",
+            backupCount=backup_count,
+            encoding="utf-8",
+            utc=False,
+        )
+        self.suffix = "%Y-%m-%d"
+
+    def doRollover(self):
+        # Close the current stream.
+        if self.stream:
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+
+        # The existing baseFilename already encodes the date it was opened
+        # for, e.g. app-2026-05-22.jsonl. That IS its final archive name,
+        # so no rename is required — we just need to leave it on disk and
+        # open a fresh file for today's date.
+        old_path = Path(self.baseFilename)
+
+        new_today = datetime.now().strftime("%Y-%m-%d")
+        new_path = self._log_dir / f"app-{new_today}.jsonl"
+
+        # Edge case: if rollover fires twice within the same calendar day
+        # (test or DST shenanigans), keep distinct files by suffixing the
+        # collision with a counter so we never silently lose data.
+        if new_path == old_path:
+            n = 1
+            while True:
+                candidate = self._log_dir / f"app-{new_today}.{n}.jsonl"
+                if not candidate.exists():
+                    new_path = candidate
+                    break
+                n += 1
+
+        self.baseFilename = str(new_path)
+
+        # Honor backupCount by trimming oldest dated files.
+        if self.backupCount > 0:
+            dated = sorted(
+                p for p in self._log_dir.glob("app-*.jsonl")
+                if self._NAME_RE.match(p.name) and p != new_path
+            )
+            for stale in dated[:-self.backupCount] if len(dated) > self.backupCount else []:
+                try:
+                    stale.unlink()
+                except Exception:
+                    pass
+
+        if not self.delay:
+            self.stream = self._open()
+
+        # Recompute next rollover time using stdlib's helper so behavior
+        # (DST handling etc.) matches the parent class.
+        current_time = int(time.time())
+        new_rollover_at = self.computeRollover(current_time)
+        while new_rollover_at <= current_time:
+            new_rollover_at += self.interval
+        self.rolloverAt = new_rollover_at
 
 
 class JsonlMultiHandler(logging.Handler):
@@ -31,17 +119,9 @@ class JsonlMultiHandler(logging.Handler):
         self._trace_handles_cap = trace_handles
         self._per_trace_handles: "OrderedDict[str, IO]" = OrderedDict()
         # Daily-rotated underlying file handler (spec §10).
-        # Use today's dated filename so the on-disk name always matches the
-        # app-YYYY-MM-DD.jsonl convention (rotation will produce the same form).
-        today = datetime.now().strftime("%Y-%m-%d")
-        self._main = TimedRotatingFileHandler(
-            filename=str(self._log_dir / f"app-{today}.jsonl"),
-            when="midnight", backupCount=retain_days, encoding="utf-8",
-            utc=False,
-        )
-        # Override suffix so file becomes app-YYYY-MM-DD.jsonl
-        self._main.suffix = "%Y-%m-%d"
-        self._main.namer = lambda name: name.replace(".jsonl.", "-").rstrip(".") + ".jsonl"
+        # _DailyJsonlHandler guarantees both live and rotated filenames
+        # match the app-YYYY-MM-DD.jsonl pattern.
+        self._main = _DailyJsonlHandler(self._log_dir, backup_count=retain_days)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
