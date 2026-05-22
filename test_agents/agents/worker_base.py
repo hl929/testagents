@@ -71,6 +71,47 @@ def extract_worker_output(worker_result: dict, output_key: str) -> dict:
     return {output_key: report}
 
 
+def aggregate_worker_result(
+    state: SupervisorState,
+    worker_result: dict,
+    output_key: str,
+    agent_name: str,
+    post_processor=None,
+) -> dict:
+    """Generic worker result aggregation: extract result, optionally post-process,
+    update outputs with dedup, and generate step_result.
+    """
+    output_value = extract_worker_output(worker_result, output_key).get(output_key, "")
+
+    if post_processor:
+        output_value = post_processor(output_value)
+
+    outputs = state.get("outputs", {}).copy()
+    existing = outputs.get(output_key, "")
+
+    plan = state.get("plan") or {}
+    steps = plan.get("steps", []) if isinstance(plan, dict) else []
+    current_index = state.get("current_step_index", 0)
+    step = steps[current_index] if current_index < len(steps) else {}
+    module_name = step.get("input_mapping", {}).get("module_name", "")
+    if existing and module_name:
+        output_value = existing + f"\n\n## 模块: {module_name}\n" + str(output_value)
+
+    outputs[output_key] = output_value
+
+    return {
+        "outputs": outputs,
+        "current_step_index": current_index + 1,
+        "step_results": [{
+            "step_id": step.get("step_id", 0),
+            "agent": agent_name,
+            "status": "success" if output_value else "failed",
+            "output_key": output_key,
+            "error": "" if output_value else "Empty result",
+        }],
+    }
+
+
 def agent_node(state: WorkerState, llm_with_tools) -> dict:
     """Worker agent node - LLM with tool binding"""
     messages = state.get("messages", [])

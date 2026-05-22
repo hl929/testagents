@@ -32,6 +32,11 @@ class TestCodeAnalyzerGraph:
             "current_step_index": 0,
             "step_results": [],
             "messages": [],
+            "worker_input": {
+                "task": "分析 payment 模块", "messages": [],
+                "error": "no", "reflection_count": 0, "max_reflections": 0,
+                "output_key": "code_change_report", "result": "",
+            },
         }
         with patch("test_agents.agents.code_analyzer.code_analyzer_graph", mock_graph):
             result = code_analyzer_wrapper(state)
@@ -61,6 +66,11 @@ class TestCodeAnalyzerGraph:
             "current_step_index": 0,
             "step_results": [],
             "messages": [],
+            "worker_input": {
+                "task": "分析 payment 模块", "messages": [],
+                "error": "no", "reflection_count": 0, "max_reflections": 0,
+                "output_key": "code_change_report", "result": "",
+            },
         }
         with patch("test_agents.agents.code_analyzer.code_analyzer_graph", mock_graph):
             result = code_analyzer_wrapper(state)
@@ -98,6 +108,11 @@ class TestCaseReviewerGraph:
             "outputs": {"code_change_report": "变更报告"},
             "step_results": [],
             "messages": [],
+            "worker_input": {
+                "task": "评审用例", "messages": [],
+                "error": "no", "reflection_count": 0, "max_reflections": 0,
+                "output_key": "review_results", "result": "",
+            },
         }
         with patch("test_agents.agents.case_reviewer.case_reviewer_graph", mock_graph):
             result = case_reviewer_wrapper(state)
@@ -127,6 +142,11 @@ class TestCaseReviewerGraph:
             "outputs": {"code_change_report": "变更报告"},
             "step_results": [],
             "messages": [],
+            "worker_input": {
+                "task": "评审用例", "messages": [],
+                "error": "no", "reflection_count": 0, "max_reflections": 0,
+                "output_key": "review_results", "result": "",
+            },
         }
         with patch("test_agents.agents.case_reviewer.case_reviewer_graph", mock_graph):
             result = case_reviewer_wrapper(state)

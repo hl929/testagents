@@ -10,7 +10,7 @@
 
 - **监督者**：Plan-and-Solve + 反思（全步骤完成后 LLM 评估，不完整则 replan）
 - **执行者**：ReAct + 反思（LLM 评估结果质量，不通过则重试，受 max\_reflections 控制）
-- **Worker 子图**通过 wrapper 函数包装后作为主图节点注册，wrapper 负责 `SupervisorState → WorkerState` 转换及结果聚合
+- **Worker 子图**作为主图节点注册，LangGraph 原生支持子图追踪
 - 支持监督者调度和直接调用 Worker 两种模式
 
 ## 2. 架构设计
@@ -25,7 +25,7 @@
 │                                                                           │
 │  ┌──────────────────┐   ┌──────────┐   ┌──────────┐   ┌───────────┐    │
 │  │intent_classifier │──→│ planner  │──→│ dispatch │──→│ reflect   │    │
-│  │ (分类+意图提取)    │   │ (分解任务) │   │ (路由分派) │   │ (整体反思) │    │
+│  │ (意图分类)        │   │ (分解任务) │   │ (路由分派) │   │ (整体反思) │    │
 │  └────────┬─────────┘   └──────────┘   └────┬─────┘   └─────┬────┘    │
 │           │ irrelevant / ambiguous          │               │          │
 │           ▼                                 │               │          │
@@ -80,7 +80,7 @@
 
 | 调用模式        | 实现方式                              | 适用场景                 |
 | ----------- | --------------------------------- | -------------------- |
-| 监督者→Worker  | Worker 子图经 wrapper 包装后作为主图节点，dispatch 路由 | 复杂任务需要拆解时            |
+| 监督者→Worker  | Worker 子图作为主图节点，dispatch 路由       | 复杂任务需要拆解时            |
 | 直接调用 Worker | main.py 中直接 `worker_app.invoke()` | 简单任务，用户明确指定某 Agent 时 |
 
 ### 2.2 目录结构
@@ -103,6 +103,9 @@ test_agents/
 │   ├── __init__.py
 │   ├── state.py                 # SupervisorState + WorkerState（重新设计）
 │   └── builder.py               # 主图构建与编译（重构）
+├── skills/                      # Claude CLI Skills（不变）
+│   ├── code_analysis_skill/
+│   └── case_review_skill/
 ├── prompts/                     # 提示词模板
 │   ├── intent_classifier.md     # 意图分类提示词
 │   ├── reply.md                 # 无关/模糊请求回复提示词
@@ -155,17 +158,6 @@ class AnalysisTarget(BaseModel):
     commit_msg: str = ""                  # commit message
 
 
-class IntentExtraction(BaseModel):
-    goal: str                              # 用户核心意图
-    modules: list[str] = []                # 涉及的模块名列表
-    source_commit: str = ""                # 源 commit SHA
-    target_commit: str = ""                # 目标 commit SHA
-    needs_code_analysis: bool = False      # 是否需要代码变更分析
-    needs_case_review: bool = False        # 是否需要测试用例评审
-    test_cases_provided: bool = False      # 用户是否提供了测试用例
-    missing_info: list[str] = []           # 缺少的关键信息
-
-
 class SupervisorState(TypedDict):
     # === 用户输入 ===
     user_request: str                     # 自然语言需求（唯一输入）
@@ -176,9 +168,7 @@ class SupervisorState(TypedDict):
     business_knowledge: str
 
     # === Plan-and-Solve ===
-    # 实际存储为 dict（planner_node 内通过 ExecutionPlan.model_dump() 序列化后写入），
-    # 以便 LangGraph state 直接序列化/反序列化。
-    plan: Optional[dict]                  # LLM 生成的计划（JSON 序列化存储）
+    plan: Optional[ExecutionPlan]         # LLM 生成的计划（JSON 序列化存储）
     current_step_index: int               # 当前执行步骤索引（0-based）
     step_results: Annotated[list, operator.add]  # reducer 聚合各步骤结果
 
@@ -195,16 +185,12 @@ class SupervisorState(TypedDict):
     # === 通用结果汇聚（所有 Worker 产出统一写入此处）===
     outputs: Annotated[dict, operator.or_]  # key → value，Worker 按 output_key 写入
 
-    # === Dispatch → Worker wrapper 中间传递 ===
-    worker_input: Optional[dict]            # dispatch 节点构建的 WorkerState 输入，由 wrapper 取出后传入子图
-
     # === 最终输出 ===
     final_answer: Optional[str]
 
     # === 意图分类 ===
     intent_classification: str              # "relevant" / "ambiguous" / "irrelevant"
     intent_reason: str                      # 分类理由
-    intent_analysis: Optional[dict]         # 结构化意图提取（仅 relevant 时有值，IntentExtraction.model_dump()）
 
     # === 消息历史 ===
     messages: Annotated[list[AnyMessage], add_messages]
@@ -230,12 +216,11 @@ class WorkerState(TypedDict):
 
 ### 3.3 主图与子图的状态映射
 
-dispatch 节点与 Worker wrapper 节点配合完成双向映射：
+dispatch 节点负责双向映射：
 
-**主图 → 子图（由 dispatch 构建 worker_input）：**
+**主图 → 子图：**
 
 ```python
-# dispatch_node 内
 worker_input = {
     "task": plan_step.description,
     "messages": [construct_agent_message(plan_step, state)],
@@ -245,19 +230,10 @@ worker_input = {
     "output_key": plan_step.output_key or agent_default_output_key(plan_step.agent),
     "result": "",
 }
-return {"worker_input": worker_input}  # 写入 SupervisorState，由下游 wrapper 取出
 ```
 
-**子图执行（由 wrapper 调用）：**
-
-```python
-# code_analyzer_wrapper / case_reviewer_wrapper 内
-worker_input = state.get("worker_input")
-result = worker_graph.invoke(worker_input)  # 调用编译后的子图
-```
-
-**子图 → 主图（由 wrapper 聚合结果）：**
-子图执行完后，wrapper 从 `WorkerState.result` 取结果，写入主图 `outputs[output_key]`，并追加 `step_results` 与递增 `current_step_index`。
+**子图 → 主图：**
+子图执行完后，dispatch 从 WorkerState.result 取结果，写入主图 `outputs[output_key]`。
 
 ### 3.4 多模块聚合规则
 
@@ -279,60 +255,31 @@ result = worker_graph.invoke(worker_input)  # 调用编译后的子图
 
 ### 4.1 Intent Classifier 节点
 
-**职责：** 在正式进入规划流程前，判断用户请求是否与系统能力相关，并对 `relevant` 请求提取结构化意图信息。
+**职责：** 在正式进入规划流程前，判断用户请求是否与系统能力相关。
 
 **输入：** `state["user_request"]`
-**输出：** `{"intent_classification": "relevant", "intent_reason": "...", "intent_analysis": {...}}`
+**输出：** `{"intent_classification": "relevant", "intent_reason": "..."}`
 
 **三分类规则：**
 
-| 分类 | 含义 | extracted | 示例 |
-|---|---|---|---|
-| `relevant` | 明确涉及代码分析或测试用例评审 | 输出 `IntentExtraction` | "分析 payment 模块代码变更" |
-| `ambiguous` | 提到相关关键词但不明确具体需求 | 不输出（null） | "帮我看看测试" |
-| `irrelevant` | 完全无关 | 不输出（null） | "hello"、"今天天气怎样" |
-
-**输出格式：**
-
-relevant 时输出结构化提取：
-```json
-{
-  "classification": "relevant",
-  "reason": "明确提到代码分析，包含模块名和 commit 范围",
-  "extracted": {
-    "goal": "分析代码变更并评审测试用例",
-    "modules": ["payment"],
-    "source_commit": "abc1234",
-    "target_commit": "def5678",
-    "needs_code_analysis": true,
-    "needs_case_review": true,
-    "test_cases_provided": false,
-    "missing_info": []
-  }
-}
-```
-
-ambiguous / irrelevant 时不输出 `extracted`：
-```json
-{"classification": "ambiguous", "reason": "提到测试但未说明具体模块"}
-```
+| 分类 | 含义 | 示例 |
+|---|---|---|
+| `relevant` | 明确涉及代码分析或测试用例评审 | "分析 payment 模块代码变更" |
+| `ambiguous` | 提到相关关键词但不明确具体需求 | "帮我看看测试" |
+| `irrelevant` | 完全无关 | "hello"、"今天天气怎样" |
 
 **实现逻辑：**
 1. 使用 `load_prompt("intent_classifier", user_request=user_request)` 生成 prompt
-2. 调用 LLM，期望返回 JSON
-3. `relevant` 时解析 `extracted` 字段，通过 `IntentExtraction.model_validate()` 校验后写入 `intent_analysis`
-4. `extracted` 解析失败时 `intent_analysis = None`，`classification` 保持不变
-5. 分类解析失败时默认 `classification = "ambiguous"`
+2. 调用 LLM，期望返回 JSON：`{"classification": "relevant", "reason": "..."}`
+3. 解析失败时默认 `classification = "ambiguous"`，reason 为解析错误提示
 
 **降级策略：**
 
 | 场景 | 行为 |
 |---|---|
-| LLM 返回非 JSON | `classification = "ambiguous"`, `intent_analysis = None` |
+| LLM 返回非 JSON | 默认 `classification = "ambiguous"` |
 | JSON 缺少 `classification` 字段 | 同上 |
 | LLM 调用失败（网络/超时） | 捕获异常，默认 `classification = "ambiguous"`，不中断流程 |
-| `classification = "relevant"` 但 `extracted` 缺失 | `intent_analysis = None`，planner 自行理解 user_request |
-| `extracted` 字段不合法 | `IntentExtraction.model_validate()` 失败，`intent_analysis = None` |
 
 **提示词：** `prompts/intent_classifier.md`
 
@@ -358,17 +305,11 @@ ambiguous / irrelevant 时不输出 `extracted`：
 
 **职责：**
 
-1. 基于 `intent_analysis`（辅助）或 `user_request`（原始），理解用户意图
+1. 解析 `user_request`，理解用户意图
 2. 提取参数（targets 列表、test_cases、business_knowledge 等）
 3. 生成 `ExecutionPlan`，包含有序步骤列表
 
 **输出：** 更新 state 的 `plan`、`targets`、`test_cases`、`business_knowledge`
-
-**与 Intent Classifier 的协作：**
-
-- `intent_analysis` 非空时，planner 直接参考其中的 goal、modules、commit 范围生成步骤，无需重新理解用户需求
-- `intent_analysis` 为 None 时，planner 根据原始 `user_request` 自行理解（回退到旧行为）
-- `intent_analysis` 是辅助参考，非强制依赖
 
 **Prompt 设计要点：**
 
@@ -520,7 +461,7 @@ ConfirmPlan
 | `code_analyzer`      | `code_analyzer` |
 | `case_reviewer`      | `case_reviewer` |
 
-**说明：** dispatch 节点为纯路由逻辑，根据 `current_step_index` 和 `plan.steps[i].agent` 选择下游 Worker，不调用 LLM，无需 prompt 模板。
+**提示词：** `prompts/dispatch.md`
 
 ### 4.5 Reflect 节点（监督者反思）
 
@@ -551,35 +492,26 @@ ConfirmPlan
 1. 读取本次 plan + step_results + reflection_feedback
 2. LLM 生成经验摘要（意图→规划→结果→反思）
 3. 写入 data/reflection_experience.md
-4. 去重：使用字符串包含匹配，检查新经验的 `intent` 和 `steps_desc` 是否已存在于文档中，重复则不追加
+4. 去重：LLM 判断新经验是否与已有经验语义重复，重复则不更新
 ```
 
 **经验文档格式：**
 
-每条经验使用统一的 `## 经验` 标题（不带序号），通过追加方式累加：
-
 ```markdown
 # 任务规划反思经验
 
-## 经验
+## 经验 1
 - **意图**: 分析代码变更并评审测试用例
-- **规划**: [code_analyzer, case_reviewer]
-- **结果**: step 1: success; step 2: success
+- **规划**: [code_analyzer → case_reviewer]
+- **结果**: 完成，LLM 评估 COMPLETE
 - **反思**: 无
 
-## 经验
+## 经验 2
 - **意图**: 分析 payment 模块代码变更
 - **规划**: [code_analyzer]
-- **结果**: step 1: failed
+- **结果**: code_change_report 为空，因为 commit SHA 无效
 - **反思**: 需在规划阶段验证参数有效性
 ```
-
-**说明：**
-
-- 标题统一为 `## 经验`，不带序号。新条目通过字符串追加方式写入，无需重排已有条目，简化文件读写逻辑
-- 解析时使用 `split("## 经验\n")` 即可逐条切分
-- **规划** 字段以英文逗号分隔 agent 名（如 `code_analyzer, case_reviewer`）
-- **结果** 字段汇总每一步的 `step_id` 和 `status`
 
 **当前阶段：** 只记录经验，不在规划时引用。后续可扩展为 planner 读取经验辅助规划。
 
@@ -616,7 +548,7 @@ prompt = load_prompt(
 
 ### 4.9 Worker 子图（ReAct + 反思）
 
-每个 Worker（code\_analyzer / case\_reviewer）是独立的 ReAct + Reflection 子图，经 wrapper 函数包装后注册为主图节点。wrapper 负责状态转换（`SupervisorState` → `WorkerState`）和结果聚合（`WorkerState.result` → `SupervisorState.outputs`）。
+每个 Worker（code\_analyzer / case\_reviewer）是独立的 ReAct + Reflection 子图，作为主图节点注册。
 
 **子图内部结构：**
 
@@ -661,17 +593,8 @@ def worker_route(state: WorkerState) -> Literal["agent", "__end__"]:
 **子图构建工厂：**
 
 ```python
-def build_worker_graph(tools: list, llm, llm_with_tools) -> CompiledGraph:
-    """构建 ReAct + Reflection Worker 子图
-
-    参数：
-    - tools: 子图绑定的工具列表（供 ToolNode 执行）
-    - llm: 原生 LLM 实例（供 reflect 节点做质量评估，无需工具绑定）
-    - llm_with_tools: 已绑定 tools 的 LLM 实例（供 agent 节点生成响应/工具调用）
-
-    需注入两个 LLM 实例的原因：agent 节点需要 bind_tools 后的 LLM 来生成 tool_calls；
-    reflect 节点只做纯文本评估，使用未绑定工具的 LLM 更高效、避免误调用工具。
-    """
+def build_worker_graph(tools: list) -> CompiledGraph:
+    """构建 ReAct + Reflection Worker 子图"""
     graph = StateGraph(WorkerState)
     graph.add_node("agent", agent_node)
     graph.add_node("tools", ToolNode(tools))
@@ -688,19 +611,13 @@ def build_worker_graph(tools: list, llm, llm_with_tools) -> CompiledGraph:
 **子图编译与注册：**
 
 ```python
-code_analyzer_graph = build_worker_graph(code_analyzer_tools, llm, llm_with_ca_tools)
-case_reviewer_graph = build_worker_graph(case_reviewer_tools, llm, llm_with_cr_tools)
+code_analyzer_graph = build_worker_graph(code_analyzer_tools)
+case_reviewer_graph = build_worker_graph(case_reviewer_tools)
 
-# 通过 wrapper 函数注册为主图节点
-# wrapper 内部将 SupervisorState.worker_input 传入子图，执行后聚合结果回 outputs
-supervisor_graph.add_node("code_analyzer", code_analyzer_wrapper)
-supervisor_graph.add_node("case_reviewer", case_reviewer_wrapper)
+# 作为主图节点注册
+supervisor_graph.add_node("code_analyzer", code_analyzer_graph)
+supervisor_graph.add_node("case_reviewer", case_reviewer_graph)
 ```
-
-**Worker Wrapper 结果处理：**
-
-- `code_analyzer_wrapper`：直接将 Worker 返回的文本写入 `outputs["code_change_report"]`。
-- `case_reviewer_wrapper`：额外执行结构化解析——提取 Markdown 代码围栏内的 JSON，将文本反序列化为 `list[dict]` 后写入 `outputs["review_results"]`；解析失败时回退为 `[{"case_id": "N/A", "verdict": "parse_error"}]`，保证下游始终拿到结构化数据。
 
 **提示词：** `prompts/worker_reflect.md`
 
@@ -822,7 +739,7 @@ def route_from_reflect(state: SupervisorState) -> Literal["planner", "synthesize
     ↓
 START → IntentClassifier
     ├─ 判断请求是否与系统能力相关
-    ├─ relevant    → 提取结构化意图（intent_analysis）→ 进入 Planner
+    ├─ relevant    → 进入 Planner
     ├─ ambiguous   → Reply（引导用户补充信息）→ END
     └─ irrelevant  → Reply（说明系统能力范围）→ END
     ↓
@@ -867,7 +784,7 @@ Synthesize
     ↓
 SaveExperience
     ├─ 记录规划与执行经验
-    ├─ 字符串包含去重判断
+    ├─ LLM 去重判断
     └─ 写入 reflection_experience.md
     ↓
 END → 输出 final_answer
@@ -1050,13 +967,16 @@ tools/
 └── business_knowledge.py    # BusinessKnowledgeTool(TestAgentTool)
 ```
 
-## 7. 错误处理
+## 7. Skill 层设计
+
+与 v1 相同，无变更。
+
+## 8. 错误处理
 
 | 场景             | 处理方式                                                 |
 | -------------- | ---------------------------------------------------- |
-| Intent Classifier 返回非 JSON | 默认 `classification = "ambiguous"`，`intent_analysis = None`，reply_node 生成引导消息 |
-| Intent Classifier LLM 调用失败 | 捕获异常，默认 `classification = "ambiguous"`，`intent_analysis = None`，不中断流程 |
-| Intent Classifier extracted 解析失败 | `classification` 保持不变，`intent_analysis = None`，planner 回退到自行理解 user_request |
+| Intent Classifier 返回非 JSON | 默认 `classification = "ambiguous"`，reply_node 生成引导消息 |
+| Intent Classifier LLM 调用失败 | 捕获异常，默认 `classification = "ambiguous"`，不中断流程 |
 | Planner 无法理解意图 | `plan` 为 None，返回错误提示要求用户补充说明                         |
 | Planner 输出格式异常 | 重试一次，仍失败则 error 终止                                   |
 | 用户拒绝计划         | 返回修改意图或终止                                            |
@@ -1167,7 +1087,7 @@ Claude CLI 需单独安装并配置到 PATH 中。
 | 监督者反思     | 无                 | 无                       | 全步骤完成后 LLM 评估，可 replan             |
 | Worker 范式 | 简单执行              | 简单执行                    | ReAct + 反思子图                       |
 | Worker 反思 | 无                 | 无                       | LLM 评估结果质量，可重试                     |
-| 子图集成      | 无                 | 无                       | Worker 子图经 wrapper 包装后作为主图节点注册  |
+| 子图集成      | 无                 | 无                       | Worker 子图作为主图节点注册                  |
 | 经验记录      | 无                 | 无                       | 规划与执行经验持久记录                        |
 | 直接调用      | 不支持               | 不支持                     | main.py 中直接调 worker\_app           |
 | 用户确认      | 无                 | 有（interrupt）            | 有（interrupt）                       |
@@ -1203,7 +1123,7 @@ Claude CLI 需单独安装并配置到 PATH 中。
 | ---- | ------------------------------ |
 | 触发条件 | 每次 synthesize 后                |
 | 记录内容 | 意图、规划、结果、反思反馈                  |
-| 去重方式 | 字符串包含匹配（检查 intent 与 steps_desc 是否已存在）              |
+| 去重方式 | LLM 语义判断是否与已有经验重复              |
 | 存储位置 | data/reflection\_experience.md |
 | 当前使用 | 只记录，不引用                        |
 | 未来扩展 | planner 读取经验辅助规划               |
