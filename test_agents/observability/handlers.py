@@ -6,7 +6,6 @@ Per spec §5 and §10. Failure modes per spec §12:
   - trace_id=None → main log only, no per-trace file
   - unserializable objects → safe_json_dumps marks them
 """
-import json
 import logging
 import re
 import sys
@@ -200,9 +199,9 @@ class JsonlMultiHandler(logging.Handler):
 
 
 def _iso_now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + \
-           f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
 
 
 # Stdlib LogRecord attrs we don't want to pass through to payload.
