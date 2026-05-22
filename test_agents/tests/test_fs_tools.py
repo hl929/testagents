@@ -208,6 +208,11 @@ class TestGrepTool:
         assert "a.txt" in out
         assert "-foo" in out
 
+    def test_grep_rejects_nonexistent_path(self, tmp_path):
+        out = GrepTool()._run(pattern="x", path=str(tmp_path / "nope"))
+        assert "错误" in out
+        assert "不存在" in out
+
 
 class TestGlobTool:
     @requires_rg
@@ -253,3 +258,8 @@ class TestGlobTool:
         out = GlobTool()._run(pattern="*.py", path="./relative")
         assert "错误" in out
         assert "绝对路径" in out
+
+    def test_glob_rejects_nonexistent_path(self, tmp_path):
+        out = GlobTool()._run(pattern="*.py", path=str(tmp_path / "nope"))
+        assert "错误" in out
+        assert "不存在" in out

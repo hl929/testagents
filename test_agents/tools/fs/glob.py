@@ -35,6 +35,9 @@ class GlobTool(TestAgentTool):
         if not os.path.isabs(path):
             return f"错误: path 必须是绝对路径，收到: {path}"
 
+        if not Path(path).exists():
+            return f"错误: 路径不存在: {path}"
+
         args = ["--files", "--glob", pattern, "--", path]
         try:
             rc, out, err = run_rg(args)

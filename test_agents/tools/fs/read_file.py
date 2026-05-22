@@ -14,7 +14,7 @@ _BINARY_SNIFF_BYTES = 4096
 
 class _ReadFileInput(BaseModel):
     file_path: str = Field(description="文件的绝对路径")
-    offset: int = Field(default=0, description="起始行号（0-based）")
+    offset: int = Field(default=0, description="跳过前 N 行（0 表示不跳过）")
     limit: int = Field(default=_DEFAULT_LIMIT, description="最多读取行数")
 
 

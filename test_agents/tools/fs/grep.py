@@ -1,5 +1,6 @@
 """GrepTool - regex content search via ripgrep."""
 import os
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +38,9 @@ class GrepTool(TestAgentTool):
     ) -> str:
         if not os.path.isabs(path):
             return f"错误: path 必须是绝对路径，收到: {path}"
+
+        if not Path(path).exists():
+            return f"错误: 路径不存在: {path}"
 
         args = ["--line-number", "--no-heading", "--color=never"]
         if case_insensitive:
