@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 from test_agents.agents.code_analyzer import build_code_analyzer_graph, code_analyzer_wrapper
 from test_agents.agents.case_reviewer import build_case_reviewer_graph, case_reviewer_wrapper
 from test_agents.graph.state import SupervisorState
+from test_agents.tools.base import ToolRegistry
 
 
 class TestCodeAnalyzerGraph:
@@ -287,17 +288,15 @@ class TestParseReviewResults:
         assert _parse_review_results("") == []
 
 
-from test_agents.tools.base import ToolRegistry
-
-
 class TestCodeAnalyzerToolBinding:
     def test_code_analyzer_tools_include_fs_tools(self):
-        """After registration, code_analyzer binds claude_cli + 4 fs tools."""
-        # Importing the module triggers __init_subclass__ registration
-        from test_agents.tools.fs.read_file import ReadFileTool
-        from test_agents.tools.fs.list_dir import ListDirTool
-        from test_agents.tools.fs.grep import GrepTool
-        from test_agents.tools.fs.glob import GlobTool
+        """After `import test_agents.tools`, code_analyzer binds claude_cli + 4 fs tools.
+
+        This test would FAIL if any of the 4 fs imports were removed from
+        test_agents/tools/__init__.py — which is exactly the regression we want
+        to catch.
+        """
+        import test_agents.tools  # noqa: F401 -- triggers __init_subclass__ registrations
 
         names = ["claude_cli", "read_file", "list_dir", "grep", "glob"]
         tools = ToolRegistry.get_tools_by_names(names)
