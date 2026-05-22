@@ -122,4 +122,7 @@ def _reset_for_tests() -> None:
     root = logging.getLogger(_LOGGER_NAME)
     for h in list(root.handlers):
         root.removeHandler(h)
+    # Restore default propagate so caplog & other test fixtures attached to the
+    # root logger can capture records from descendant loggers.
+    root.propagate = True
     callback_mod.metrics = None

@@ -11,6 +11,13 @@ from test_agents.config import config
 from test_agents.graph.builder import build_graph
 from test_agents.agents.worker_base import WORKER_REGISTRY
 from test_agents.graph.state import WorkerState
+from test_agents.observability import (
+    setup_logging, new_trace, get_trace_id, new_trace_metrics,
+    flush_metrics, close_trace_writer, make_run_config,
+)
+
+# Initialize once at module load. Idempotent.
+setup_logging()
 
 
 _SINGLE_AGENT_KEYWORDS = {
@@ -62,8 +69,44 @@ def run_test_agents(user_request: str) -> dict:
     build_graph()
     simple_agent = is_simple_request(user_request)
     if simple_agent:
-        return _run_direct_worker(user_request, simple_agent)
-    return _run_supervisor(user_request)
+        return _with_observability(
+            lambda: _run_direct_worker(user_request, simple_agent),
+            user_request,
+            kind="simple",
+        )
+    return _with_observability(
+        lambda: _run_supervisor(user_request),
+        user_request,
+        kind="supervisor",
+    )
+
+
+def _with_observability(target_func, user_request: str, kind: str) -> dict:
+    """Trace lifecycle wrapper (spec §6 + Eng Finding 4.1/4.6).
+
+    Owns:
+      - new_trace() / new_trace_metrics() at entry
+      - flush_metrics(status=ok|error|aborted) on every exit
+      - close_trace_writer() in finally
+    """
+    trace_id = new_trace(user_request)
+    new_trace_metrics(trace_id, user_request)
+    status = "ok"
+    final_answer = ""
+    try:
+        result = target_func()
+        final_answer = (result.get("final_answer") if isinstance(result, dict) else "") or ""
+        # Supervisor path may return without final_answer if confirm_retry
+        # limit was hit (Eng Finding 4.6).
+        if not final_answer and kind == "supervisor":
+            status = "aborted"
+        return result
+    except BaseException:
+        status = "error"
+        raise
+    finally:
+        flush_metrics(trace_id, status=status, final_answer_length=len(final_answer))
+        close_trace_writer(trace_id)
 
 
 def _run_direct_worker(user_request: str, agent_name: str) -> dict:
@@ -80,7 +123,8 @@ def _run_direct_worker(user_request: str, agent_name: str) -> dict:
         "output_key": "result",
         "result": "",
     }
-    result = worker_graph.invoke(worker_input)
+    # Eng Finding 1.3: callback must fire on simple-worker path too.
+    result = worker_graph.invoke(worker_input, make_run_config(thread_id=f"direct-{agent_name}"))
     output_text = result.get("result", "")
     if not output_text:
         for msg in reversed(result.get("messages", [])):
@@ -101,7 +145,7 @@ def _run_direct_worker(user_request: str, agent_name: str) -> dict:
 def _run_supervisor(user_request: str) -> dict:
     """走完整的 Supervisor 主图。"""
     app = build_graph()
-    thread_config = {"configurable": {"thread_id": "test-agents-session"}}
+    thread_config = make_run_config(thread_id="test-agents-session")
     initial_state = _build_initial_state(user_request)
     result = app.invoke(initial_state, thread_config)
     while True:
