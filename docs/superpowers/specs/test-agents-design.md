@@ -98,7 +98,14 @@ test_agents/
 │   ├── base.py                  # TestAgentTool 基类 + ToolRegistry 自动注册表
 │   ├── claude_cli.py
 │   ├── test_case_parser.py
-│   └── business_knowledge.py
+│   ├── business_knowledge.py
+│   └── fs/                      # 本地文件系统工具子包
+│       ├── __init__.py
+│       ├── _rg.py               # ripgrep subprocess 共享封装
+│       ├── read_file.py         # ReadFileTool
+│       ├── list_dir.py          # ListDirTool
+│       ├── grep.py              # GrepTool
+│       └── glob.py              # GlobTool
 ├── graph/                       # 图编排
 │   ├── __init__.py
 │   ├── state.py                 # SupervisorState + WorkerState（重新设计）
@@ -655,7 +662,7 @@ def worker_route(state: WorkerState) -> Literal["agent", "__end__"]:
     return "agent"  # 重试
 ```
 
-**code\_analyzer 子图工具：** `ClaudeCliTool`
+**code\_analyzer 子图工具：** `ClaudeCliTool`、`ReadFileTool`、`ListDirTool`、`GrepTool`、`GlobTool`
 **case\_reviewer 子图工具：** `ClaudeCliTool`、`TestCaseParserTool`、`BusinessKnowledgeTool`
 
 **子图构建工厂：**
@@ -1001,6 +1008,10 @@ class ToolRegistry:
 | `claude_cli`               | `ClaudeCliTool`         | 封装 `claude -p` 调用   | code\_analyzer, case\_reviewer |
 | `parse_test_cases`         | `TestCaseParserTool`    | 统一解析 JSON/Text 用例输入 | case\_reviewer                 |
 | `query_business_knowledge` | `BusinessKnowledgeTool` | 按模块名查询本地业务知识        | case\_reviewer                 |
+| `read_file`                | `ReadFileTool`          | 读取文件并附带 `cat -n` 行号，仅接受绝对路径；二进制 / 大文件自动保护 | code\_analyzer                 |
+| `list_dir`                 | `ListDirTool`           | 树形列出目录，跳过 `.git`/`node_modules`/`__pycache__`/`.venv`，最多 500 条 | code\_analyzer                 |
+| `grep`                     | `GrepTool`              | 基于 ripgrep 的正则内容搜索，支持 `include` glob 与 `case_insensitive`，最多 100 条匹配 | code\_analyzer                 |
+| `glob`                     | `GlobTool`              | 基于 `rg --files --glob` 的文件名匹配，按 mtime 倒序，最多 200 条 | code\_analyzer                 |
 
 ### 6.4 使用方式
 
@@ -1010,7 +1021,9 @@ class ToolRegistry:
 # agents/code_analyzer.py
 from test_agents.tools.base import ToolRegistry
 
-_code_analyzer_tools = ToolRegistry.get_tools_by_names(["claude_cli"])
+_code_analyzer_tools = ToolRegistry.get_tools_by_names(
+    ["claude_cli", "read_file", "list_dir", "grep", "glob"]
+)
 
 # agents/case_reviewer.py
 _case_reviewer_tools = ToolRegistry.get_tools_by_names([
@@ -1047,8 +1060,42 @@ tools/
 ├── base.py                  # TestAgentTool + ToolRegistry
 ├── claude_cli.py            # ClaudeCliTool(TestAgentTool)
 ├── test_case_parser.py      # TestCaseParserTool(TestAgentTool)
-└── business_knowledge.py    # BusinessKnowledgeTool(TestAgentTool)
+├── business_knowledge.py    # BusinessKnowledgeTool(TestAgentTool)
+└── fs/                      # 本地文件系统工具子包
+    ├── __init__.py          # 占位
+    ├── _rg.py               # ripgrep subprocess 共享封装 (run_rg / RgNotInstalled)
+    ├── read_file.py         # ReadFileTool(TestAgentTool)
+    ├── list_dir.py          # ListDirTool(TestAgentTool)
+    ├── grep.py              # GrepTool(TestAgentTool)
+    └── glob.py              # GlobTool(TestAgentTool)
 ```
+
+### 6.7 本地文件系统工具子包（fs/）
+
+为 `code_analyzer` 增加跨仓库源码探索能力，让 Worker 不必绕道 `claude_cli` 即可访问任意绝对路径（如 `/mnt/d/obs_node/`）。完整设计见 `docs/superpowers/specs/2026-05-21-local-fs-tools-design.md`。
+
+**设计要点：**
+
+- **只读**：4 个工具均只读，不提供 `write_file` / `edit` / `shell` 等可破坏性接口
+- **仅接受绝对路径**：所有工具内部首先校验 `os.path.isabs(path)`，避免相对路径的歧义与跨 cwd 行为不确定
+- **不维护会话级 cwd**：保持工具无状态，与 LangGraph 子图并发 / 重试天然兼容
+- **不限制路径范围**：依赖操作系统权限做隔离，而非应用层白名单（避免 TerminalTool 风格的"可绕过白名单"陷阱）
+- **subprocess 安全**：grep / glob 使用 `subprocess.run([...])` list 形式，禁用 `shell=True`，并在参数中加 `--` 终止符防止 `pattern` 以 `-` 开头被误解析为 flag
+- **统一截断**：每个工具有独立的 `max_results` / `_DEFAULT_LIMIT` 截断阈值（read 2000 行 / list 500 条 / grep 100 条 / glob 200 条），输出末尾附 `⚠️ ... 超过 N, 仅显示前 N 条`
+- **LLM 友好错误**：所有错误以 `错误: <中文 + 建议>` 字符串形式返回，由 Worker 反思决定重试或换路径，工具本身不抛异常
+
+**`_rg.py` 共享封装：**
+
+- 定位 `rg` 二进制 (`shutil.which("rg")`)；未找到时抛 `RgNotInstalled` 并带平台安装提示
+- 统一 30 秒超时，转换 `subprocess.TimeoutExpired` 为 `TimeoutError`
+- `grep` / `glob` 各自捕获 `RgNotInstalled` / `TimeoutError` / 通用 `Exception`，转为 LLM 友好错误
+
+**Worker 绑定：**
+
+- `code_analyzer = [claude_cli, read_file, list_dir, grep, glob]`
+- `case_reviewer` 不变（保持 `[claude_cli, parse_test_cases, query_business_knowledge]`）
+
+**Prompt 配套：** `prompts/code_analyzer.md` 已更新，列出 5 个工具能力与一个 6 步工作流模板，指导 LLM 在分析跨仓库代码时先 `list_dir` / `glob` 探索、再 `read_file` / `grep` 查证、最后 `claude_cli` 拉 `git diff`。
 
 ## 7. 错误处理
 
@@ -1067,6 +1114,13 @@ tools/
 | 经验写入失败         | 静默跳过，不影响主流程                                          |
 | 用例格式错误         | TestCaseParserTool 返回结构化错误                           |
 | 业务知识库未命中       | 返回空字符串继续执行                                           |
+| fs 工具传入非绝对路径 | 返回 `错误: ... 必须是绝对路径，收到: ...`，由 Worker 反思决定重试 |
+| fs 工具路径不存在 / 类型不符 | 返回 `错误: 文件不存在 / 路径是目录, 请用 list_dir / ...`，引导 LLM 换工具或换路径 |
+| `read_file` 读到二进制 / 超大文件 | 二进制返回拒绝错误；> 5 MB 文件强制截断到前 2000 行并附 `⚠️ 文件过大` |
+| `grep` / `glob` 未安装 ripgrep | 返回 `错误: 未找到 ripgrep。请安装：apt install ripgrep / brew install ripgrep / scoop install ripgrep` |
+| `grep` / `glob` ripgrep 超时（默认 30s） | 返回 `错误: ripgrep 超时（30s），考虑缩小 path 或使用更精确的 include 过滤` |
+| `grep` 无匹配 / `glob` 无文件 | rg 退出码 1 → 返回 `未找到匹配` / `未找到匹配文件`（视为正常结果，非错误） |
+| `list_dir` 遇符号链接到目录 | 显示为 `name -> (symlink)`，不递归，避免环回
 
 ### 3.6 通用 outputs 机制详解
 
@@ -1158,6 +1212,17 @@ pydantic
 
 Claude CLI 需单独安装并配置到 PATH 中。
 
+**系统依赖：ripgrep**
+
+`grep` / `glob` 工具基于 ripgrep。按平台安装：
+
+- WSL/Ubuntu/Debian：`sudo apt install ripgrep`
+- macOS：`brew install ripgrep`
+- Windows (scoop)：`scoop install ripgrep`
+- Windows (winget)：`winget install BurntSushi.ripgrep.MSVC`
+
+未安装时 `grep` / `glob` 会返回带平台命令提示的友好错误，不影响 `read_file` / `list_dir` 与其他工具的正常使用。
+
 ## 11. 与之前版本的关键差异
 
 | 维度        | v1（Supervisor 模式） | v2（Plan-and-Solve）      | v3（Plan-and-Solve + Reflection）    |
@@ -1174,6 +1239,7 @@ Claude CLI 需单独安装并配置到 PATH 中。
 | 参数来源      | 用户直接提供            | Planner 从自然语言提取         | Planner 从自然语言提取                    |
 | 步骤间数据传递   | 隐式                | 显式 input\_mapping + ${} | 显式 input\_mapping + ${outputs.xxx} |
 | 结果汇聚      | 固定字段（硬编码）         | 固定字段（硬编码）               | 通用 `outputs` 字典（配置驱动）              |
+| code\_analyzer 工具 | 仅 `claude_cli` | 仅 `claude_cli` | `claude_cli` + 本地 fs 工具（`read_file` / `list_dir` / `grep` / `glob`，后两者基于 ripgrep），支持跨仓库源码探索 |
 
 ## 12. 反思与经验机制详解
 
