@@ -12,7 +12,7 @@ from test_agents.graph.builder import build_graph
 from test_agents.agents.worker_base import WORKER_REGISTRY
 from test_agents.graph.state import WorkerState
 from test_agents.observability import (
-    setup_logging, new_trace, get_trace_id, new_trace_metrics,
+    setup_logging, new_trace, new_trace_metrics,
     flush_metrics, close_trace_writer, make_run_config,
 )
 

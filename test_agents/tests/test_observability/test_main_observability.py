@@ -90,29 +90,7 @@ def test_close_trace_writer_called_in_finally(_isolated_logs):
         called_with = ctw.call_args[0][0]
         assert called_with.startswith("tr_")
 
-def test_interrupt_resume_no_spurious_error(_isolated_logs):
-    """Eng Finding 4.5 verification: GraphInterrupt does not produce error events.
-
-    Mock _run_supervisor to drive a fake invoke that raises GraphInterrupt during
-    the inner call but resumes successfully on a second pass. After the call
-    completes, no node.exit with status=error should appear in the trace file.
-    """
-    from langgraph.errors import GraphInterrupt
-    from test_agents import main as main_mod
-
-    call_count = {"n": 0}
-    def fake_supervisor(user_request):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            # First call: simulate inner interrupt that LangGraph swallows.
-            # _run_supervisor's interrupt loop handles this — we model the outer
-            # behavior: it eventually returns success.
-            pass
-        return {"final_answer": "done", "step_results": []}
-
-    with patch.object(main_mod, "_run_supervisor", side_effect=fake_supervisor):
-        main_mod.run_test_agents("anything supervisor")
-
-    metrics = _read_metrics(_isolated_logs)
-    # No error status logged when interrupt was part of normal flow.
-    assert metrics[0]["status"] == "ok"
+# Note: Eng Finding 4.5 (GraphInterrupt does not produce error events) is
+# verified by the integration test in test_integration.py, which uses a real
+# LangGraph instance. A pure-mock test here would only restate
+# test_supervisor_path_writes_ok_metric and add no coverage.
