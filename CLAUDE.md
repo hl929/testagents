@@ -13,6 +13,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 pip install -r requirements.txt
 ```
 
+### 系统依赖：ripgrep
+
+`grep` / `glob` 工具基于 ripgrep。请按平台安装：
+
+- WSL/Ubuntu/Debian：`sudo apt install ripgrep`
+- macOS：`brew install ripgrep`
+- Windows (scoop)：`scoop install ripgrep`
+- Windows (winget)：`winget install BurntSushi.ripgrep.MSVC`
+
+验证：`rg --version`
+
 ### 运行测试
 ```bash
 # 运行全部测试
@@ -78,7 +89,7 @@ START → agent → (tools_condition) → tools → agent → reflect → (worke
 - **tools**: `ToolNode` 执行工具调用
 - **reflect**: 评估结果质量，质量不通过时返回错误消息让 agent 重试
 - 两个 Worker：
-  - `code_analyzer`: 工具为 `[claude_cli]`，输出写入 `code_change_report`
+  - `code_analyzer`: 工具为 `[claude_cli, read_file, list_dir, grep, glob]`，输出写入 `code_change_report`
   - `case_reviewer`: 工具为 `[claude_cli, parse_test_cases, query_business_knowledge]`，输出写入 `review_results`
 
 ### 状态定义
@@ -102,6 +113,7 @@ START → agent → (tools_condition) → tools → agent → reflect → (worke
 - **ClaudeCliTool** (`test_agents/tools/claude_cli.py`): 通过 `subprocess.run(["claude", "-p", prompt])` 调用 Claude CLI，有超时和重试机制
 - **TestCaseParserTool** (`test_agents/tools/test_case_parser.py`): 解析 JSON/Text 格式测试用例
 - **BusinessKnowledgeTool** (`test_agents/tools/business_knowledge.py`): 从本地 JSON 知识库查询模块业务知识
+- **ReadFileTool / ListDirTool / GrepTool / GlobTool** (`test_agents/tools/fs/`): 4 个只读文件系统工具。`read_file` / `list_dir` 走原生 fs，`grep` / `glob` 通过 `subprocess` 调用 ripgrep（共享 `_rg.py`）。全部仅接受绝对路径。绑定到 `code_analyzer`，用于跨仓库源码探索。
 
 ### Prompt 系统
 
