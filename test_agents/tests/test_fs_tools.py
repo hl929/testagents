@@ -3,6 +3,7 @@ import shutil
 import pytest
 
 from test_agents.tools.fs._rg import run_rg, RgNotInstalled
+from test_agents.tools.fs.grep import GrepTool
 from test_agents.tools.fs.list_dir import ListDirTool
 from test_agents.tools.fs.read_file import ReadFileTool
 
@@ -144,3 +145,51 @@ class TestListDirTool:
         out = ListDirTool()._run(path=str(tmp_path), depth=1)
         assert out.count("\n") <= 510  # 500 + 截断提示
         assert "截断" in out or "⚠️" in out
+
+
+class TestGrepTool:
+    @requires_rg
+    def test_grep_finds_pattern(self, tmp_path):
+        (tmp_path / "a.py").write_text("def foo(): pass\ndef bar(): pass\n")
+        out = GrepTool()._run(pattern="def foo", path=str(tmp_path))
+        assert "a.py" in out
+        assert "def foo" in out
+
+    @requires_rg
+    def test_grep_no_match(self, tmp_path):
+        (tmp_path / "a.py").write_text("def foo(): pass\n")
+        out = GrepTool()._run(pattern="nonexistent_zzz", path=str(tmp_path))
+        assert "未找到匹配" in out
+
+    @requires_rg
+    def test_grep_include_filter(self, tmp_path):
+        (tmp_path / "a.py").write_text("hello\n")
+        (tmp_path / "b.md").write_text("hello\n")
+        out = GrepTool()._run(pattern="hello", path=str(tmp_path), include="*.py")
+        assert "a.py" in out
+        assert "b.md" not in out
+
+    @requires_rg
+    def test_grep_case_insensitive(self, tmp_path):
+        (tmp_path / "a.txt").write_text("Hello World\n")
+        out = GrepTool()._run(pattern="hello", path=str(tmp_path), case_insensitive=True)
+        assert "Hello" in out
+
+    @requires_rg
+    def test_grep_max_results_truncates(self, tmp_path):
+        for i in range(150):
+            (tmp_path / f"f{i:03}.txt").write_text("MATCH\n")
+        out = GrepTool()._run(pattern="MATCH", path=str(tmp_path), max_results=10)
+        assert out.count("MATCH") <= 12  # 10 matches + 2 in trailing notice
+        assert "⚠️" in out
+
+    def test_grep_rejects_relative_path(self):
+        out = GrepTool()._run(pattern="x", path="./relative")
+        assert "错误" in out
+        assert "绝对路径" in out
+
+    def test_grep_rg_missing_returns_friendly_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("test_agents.tools.fs._rg.shutil.which", lambda name: None)
+        out = GrepTool()._run(pattern="x", path=str(tmp_path))
+        assert "错误" in out
+        assert "ripgrep" in out
