@@ -22,7 +22,7 @@ class ClaudeCliTool(TestAgentTool):
         if not prompt:
             return "错误: prompt 不能为空"
 
-        cmd = ["claude", "-p", prompt]
+        cmd = ["claude", "--dangerously-skip-permissions", "-p", prompt]
         if model:
             cmd.extend(["--model", model])
 
