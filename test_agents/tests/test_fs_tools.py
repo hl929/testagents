@@ -1,8 +1,10 @@
 """Tests for test_agents.tools.fs"""
 import shutil
+import time
 import pytest
 
 from test_agents.tools.fs._rg import run_rg, RgNotInstalled
+from test_agents.tools.fs.glob import GlobTool
 from test_agents.tools.fs.grep import GrepTool
 from test_agents.tools.fs.list_dir import ListDirTool
 from test_agents.tools.fs.read_file import ReadFileTool
@@ -205,3 +207,47 @@ class TestGrepTool:
         out = GrepTool()._run(pattern="-foo", path=str(tmp_path))
         assert "a.txt" in out
         assert "-foo" in out
+
+
+class TestGlobTool:
+    @requires_rg
+    def test_glob_matches_pattern(self, tmp_path):
+        (tmp_path / "a.py").write_text("x")
+        (tmp_path / "b.md").write_text("x")
+        out = GlobTool()._run(pattern="*.py", path=str(tmp_path))
+        assert "a.py" in out
+        assert "b.md" not in out
+
+    @requires_rg
+    def test_glob_recursive_pattern(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "inner.py").write_text("x")
+        out = GlobTool()._run(pattern="**/*.py", path=str(tmp_path))
+        assert "inner.py" in out
+
+    @requires_rg
+    def test_glob_sorts_by_mtime_desc(self, tmp_path):
+        old = tmp_path / "old.py"
+        old.write_text("x")
+        time.sleep(0.05)
+        new = tmp_path / "new.py"
+        new.write_text("x")
+        out = GlobTool()._run(pattern="*.py", path=str(tmp_path))
+        lines = [l for l in out.splitlines() if l.strip()]
+        assert lines[0].endswith("new.py")
+        assert lines[1].endswith("old.py")
+
+    @requires_rg
+    def test_glob_max_results_truncates(self, tmp_path):
+        for i in range(250):
+            (tmp_path / f"f{i:03}.py").write_text("x")
+        out = GlobTool()._run(pattern="*.py", path=str(tmp_path), max_results=10)
+        lines = [l for l in out.splitlines() if l.strip() and not l.startswith("⚠️")]
+        assert len(lines) == 10
+        assert "⚠️" in out
+
+    def test_glob_rejects_relative_path(self):
+        out = GlobTool()._run(pattern="*.py", path="./relative")
+        assert "错误" in out
+        assert "绝对路径" in out
