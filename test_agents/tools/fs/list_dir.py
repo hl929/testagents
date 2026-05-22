@@ -47,29 +47,36 @@ class ListDirTool(TestAgentTool):
             if level > depth or truncated:
                 return
             try:
-                items = sorted(d.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+                with os.scandir(d) as it:
+                    items = sorted(
+                        it,
+                        key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower()),
+                    )
             except OSError as e:
                 entries.append(f"{prefix}(无法读取: {e!r})")
                 return
-            for item in items:
+            for entry in items:
                 if truncated:
                     return
-                if item.name in _NOISE_DIRS:
+                if entry.name in _NOISE_DIRS:
                     continue
-                if not show_hidden and item.name.startswith("."):
+                if not show_hidden and entry.name.startswith("."):
                     continue
                 if len(entries) >= _MAX_ENTRIES:
                     truncated = True
                     return
-                if item.is_dir():
-                    entries.append(f"{prefix}{item.name}/")
-                    walk(item, level + 1, prefix + "  ")
+                if entry.is_symlink() and entry.is_dir():
+                    # symlink to a directory — show but don't follow (prevents loops)
+                    entries.append(f"{prefix}{entry.name} -> (symlink)")
+                elif entry.is_dir(follow_symlinks=False):
+                    entries.append(f"{prefix}{entry.name}/")
+                    walk(Path(entry.path), level + 1, prefix + "  ")
                 else:
                     try:
-                        size = item.stat().st_size
-                        entries.append(f"{prefix}{item.name} ({size}B)")
+                        size = entry.stat(follow_symlinks=False).st_size
+                        entries.append(f"{prefix}{entry.name} ({size}B)")
                     except OSError:
-                        entries.append(f"{prefix}{item.name}")
+                        entries.append(f"{prefix}{entry.name}")
 
         walk(p, 1, "")
         body = "\n".join(entries)

@@ -148,6 +148,34 @@ class TestListDirTool:
         assert out.count("\n") <= 510  # 500 + 截断提示
         assert "截断" in out or "⚠️" in out
 
+    def test_does_not_follow_symlink_directories(self, tmp_path):
+        """Symlinks to directories must not cause recursion."""
+        real = tmp_path / "real"
+        real.mkdir()
+        (real / "file.txt").write_text("x")
+        link = tmp_path / "link"
+        link.symlink_to(real, target_is_directory=True)
+        out = ListDirTool()._run(path=str(tmp_path), depth=3)
+        # `real/file.txt` shows once (via real); `link/file.txt` must NOT appear
+        assert "real/" in out
+        assert "link" in out
+        assert "(symlink)" in out
+        # Should mention file.txt at most once (under real/, not under link/)
+        assert out.count("file.txt") == 1
+
+    def test_symlink_loop_does_not_explode(self, tmp_path):
+        """A self-referential symlink must not cause infinite recursion."""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        # symlink pointing back to parent — classic loop
+        (sub / "loop").symlink_to(tmp_path, target_is_directory=True)
+        (sub / "real.txt").write_text("x")
+        out = ListDirTool()._run(path=str(tmp_path), depth=3)
+        # Should complete without hanging, and show 'loop' once as a symlink marker
+        assert "real.txt" in out
+        assert "loop" in out
+        assert "(symlink)" in out
+
 
 class TestGrepTool:
     @requires_rg
