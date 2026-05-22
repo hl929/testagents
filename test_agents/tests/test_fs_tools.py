@@ -180,8 +180,11 @@ class TestGrepTool:
         for i in range(150):
             (tmp_path / f"f{i:03}.txt").write_text("MATCH\n")
         out = GrepTool()._run(pattern="MATCH", path=str(tmp_path), max_results=10)
-        assert out.count("MATCH") <= 12  # 10 matches + 2 in trailing notice
+        # exactly 10 match lines, no more
+        match_lines = [l for l in out.splitlines() if "MATCH" in l]
+        assert len(match_lines) == 10
         assert "⚠️" in out
+        assert "结果超过 10" in out
 
     def test_grep_rejects_relative_path(self):
         out = GrepTool()._run(pattern="x", path="./relative")
@@ -191,5 +194,14 @@ class TestGrepTool:
     def test_grep_rg_missing_returns_friendly_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr("test_agents.tools.fs._rg.shutil.which", lambda name: None)
         out = GrepTool()._run(pattern="x", path=str(tmp_path))
-        assert "错误" in out
+        assert out.startswith("错误: ")
         assert "ripgrep" in out
+        assert "apt install ripgrep" in out
+
+    @requires_rg
+    def test_grep_pattern_starting_with_dash(self, tmp_path):
+        """The `--` separator in run_rg args must protect against patterns starting with '-'."""
+        (tmp_path / "a.txt").write_text("-foo bar\n--bar baz\n")
+        out = GrepTool()._run(pattern="-foo", path=str(tmp_path))
+        assert "a.txt" in out
+        assert "-foo" in out
