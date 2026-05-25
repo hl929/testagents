@@ -94,8 +94,8 @@ START → agent → (tools_condition) → tools → agent → reflect → (worke
 
 ### 状态定义
 
-- **`SupervisorState`** (`test_agents/graph/state.py`): 主图状态，TypedDict，包含 `user_request`, `plan`, `current_step_index`, `step_results`, `code_change_report`, `review_results`, `final_answer` 等
-- **`WorkerState`** (`test_agents/graph/state.py`): Worker 子图状态，TypedDict，包含 `task`, `messages`, `error`, `reflection_count`, `result`
+- **`SupervisorState`** (`test_agents/graph/state.py`): 主图状态，TypedDict，包含 `user_request`, `plan`, `current_step_index`, `step_results`, `outputs`, `final_answer` 等；Worker 产出统一写入 `outputs[output_key]`，不再使用顶层 `code_change_report` / `review_results` 固定字段
+- **`WorkerState`** (`test_agents/graph/state.py`): Worker 子图状态，TypedDict，包含 `task`, `messages`, `error`, `reflection_count`, `max_reflections`, `result`, `output_key`
 - **`ExecutionPlan`** / **`PlanStep`** / **`StepResult`** / **`AnalysisTarget`**: Pydantic BaseModel，用于结构化 LLM 输出和输入校验
 
 ### 路由函数
@@ -110,7 +110,7 @@ START → agent → (tools_condition) → tools → agent → reflect → (worke
 
 - **TestAgentTool 基类** (`test_agents/tools/base.py`): 所有工具继承 `TestAgentTool(BaseTool)`，子类定义时自动注册到 `ToolRegistry`
 - **ToolRegistry** (`test_agents/tools/base.py`): 自动注册表，提供 `get_tools_by_names()` 按 Worker 绑定工具、`render_all()` 动态生成 Planner 工具描述
-- **ClaudeCliTool** (`test_agents/tools/claude_cli.py`): 通过 `subprocess.run(["claude", "-p", prompt])` 调用 Claude CLI，有超时和重试机制
+- **ClaudeCliTool** (`test_agents/tools/claude_cli.py`): 通过 `subprocess.run(["claude", "--dangerously-skip-permissions", "-p", prompt])` 调用 Claude CLI，有超时和重试机制
 - **TestCaseParserTool** (`test_agents/tools/test_case_parser.py`): 解析 JSON/Text 格式测试用例
 - **BusinessKnowledgeTool** (`test_agents/tools/business_knowledge.py`): 从本地 JSON 知识库查询模块业务知识
 - **ReadFileTool / ListDirTool / GrepTool / GlobTool** (`test_agents/tools/fs/`): 4 个只读文件系统工具。`read_file` / `list_dir` 走原生 fs，`grep` / `glob` 通过 `subprocess` 调用 ripgrep（共享 `_rg.py`）。全部仅接受绝对路径。绑定到 `code_analyzer`，用于跨仓库源码探索。
@@ -125,12 +125,12 @@ Prompt 模板存放在 `test_agents/prompts/*.md`，通过 `test_agents/prompts/
 
 | 变量 | 说明 | 默认值 |
 |---|---|---|
-| `TEST_AGENTS_MODEL` | LLM 模型 | gpt-4o |
+| `TEST_AGENTS_MODEL` | LLM 模型 | kimi-k2.6 |
 | `OPENAI_API_KEY` | OpenAI API Key | — |
 | `OPENAI_BASE_URL` | LLM API 基地址（国内模型） | — |
-| `TEST_AGENTS_CLAUDE_TIMEOUT` | Claude CLI 超时(秒) | 120 |
+| `TEST_AGENTS_CLAUDE_TIMEOUT` | Claude CLI 超时(秒) | 1200 |
 | `TEST_AGENTS_MAX_PLAN_ITERATIONS` | 最大计划迭代次数 | 1 |
-| `TEST_AGENTS_MAX_CONFIRM_RETRIES` | 最大计划确认重试次数 | 3 |
+| `TEST_AGENTS_MAX_CONFIRM_RETRIES` | 最大计划确认重试次数 | 1 |
 | `TEST_AGENTS_EXPERIENCE_FILE` | 反思经验文件路径 | `data/reflection_experience.md` |
 
 ## Key Files

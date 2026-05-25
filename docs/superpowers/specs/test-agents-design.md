@@ -433,7 +433,7 @@ Planner 提取 targets：
       "agent": "case_reviewer",
       "description": "基于变更报告评审测试用例",
       "input_mapping": {
-        "code_change_report": "${code_change_report}",
+        "code_change_report": "${outputs.code_change_report}",
         "test_cases": "${test_cases}",
         "business_knowledge": "${business_knowledge}"
       }
@@ -1017,7 +1017,7 @@ class ToolRegistry:
 
 | 工具                         | 类名                      | 描述                  | 绑定 Worker                      |
 | -------------------------- | ----------------------- | ------------------- | ------------------------------ |
-| `claude_cli`               | `ClaudeCliTool`         | 封装 `claude -p` 调用   | code\_analyzer, case\_reviewer |
+| `claude_cli`               | `ClaudeCliTool`         | 封装 `claude --dangerously-skip-permissions -p` 调用 | code\_analyzer, case\_reviewer |
 | `parse_test_cases`         | `TestCaseParserTool`    | 统一解析 JSON/Text 用例输入 | case\_reviewer                 |
 | `query_business_knowledge` | `BusinessKnowledgeTool` | 按模块名查询本地业务知识        | case\_reviewer                 |
 | `read_file`                | `ReadFileTool`          | 读取文件并附带 `cat -n` 行号，仅接受绝对路径；二进制 / 大文件自动保护 | code\_analyzer                 |
@@ -1313,10 +1313,10 @@ main.py: run_test_agents(user_request)
   ├─ setup_logging()                        ← 模块导入时一次
   └─ return _with_observability(target_func, user_request, kind)
        ├─ new_trace(user_request)           ← 生成 trace_id，存入 ContextVar
-       ├─ result = target_func(make_run_config())
-       │            （config 携带 ObservabilityCallback）
+       ├─ result = target_func(make_run_config(thread_id=...))
+       │            （config 携带 ObservabilityCallback 和 LangGraph thread_id）
        ├─ flush_metrics(status, final_answer_length)  ← 追加 metrics.jsonl
-       └─ close_trace_writer()              ← 关闭 per-trace 文件 + 清理跨事件 dict
+       └─ close_trace_writer(trace_id)       ← 关闭 per-trace 文件 + 清理跨事件 dict
               ↓
    LangGraph 引擎执行（自动触发 callback，业务代码改动 0 处）
               ↓
@@ -1381,7 +1381,7 @@ logs/
 
 ```json
 {
-  "ts": "2026-05-22T10:30:45.123Z",
+  "ts": "2026-05-22T10:30:45.123+08:00",
   "level": "INFO",
   "trace_id": "tr_8a3f2c1d",
   "span_id": "sp_b21c4a90",

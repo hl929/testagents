@@ -385,6 +385,7 @@ def test_direct_worker_invocation_code_analyzer():
     assert result["outputs"]["code_change_report"] == "## 变更概述\n新增订单功能"
     assert result["final_answer"] == "## 变更概述\n新增订单功能"
     assert result["step_results"][0]["agent"] == "code_analyzer"
+    assert mock_graph.invoke.call_args.args[0]["output_key"] == "code_change_report"
 
 
 def test_direct_worker_invocation_case_reviewer():
@@ -399,6 +400,7 @@ def test_direct_worker_invocation_case_reviewer():
         result = run_test_agents("评审测试用例")
     assert result["outputs"]["review_results"] == '[{"case_id": "TC001", "verdict": "pass"}]'
     assert result["step_results"][0]["agent"] == "case_reviewer"
+    assert mock_graph.invoke.call_args.args[0]["output_key"] == "review_results"
 
 
 def test_save_experience_dedup(tmp_path):

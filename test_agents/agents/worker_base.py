@@ -94,8 +94,9 @@ def aggregate_worker_result(
     current_index = state.get("current_step_index", 0)
     step = steps[current_index] if current_index < len(steps) else {}
     module_name = step.get("input_mapping", {}).get("module_name", "")
-    if existing and module_name:
-        output_value = existing + f"\n\n## 模块: {module_name}\n" + str(output_value)
+    if module_name:
+        section = f"## 模块: {module_name}\n{output_value}"
+        output_value = f"{existing}\n\n{section}" if existing else section
 
     outputs[output_key] = output_value
 
@@ -112,10 +113,11 @@ def aggregate_worker_result(
     }
 
 
-def agent_node(state: WorkerState, llm_with_tools) -> dict:
+def agent_node(state: WorkerState, llm_with_tools, system_prompt: str | None = None) -> dict:
     """Worker agent node - LLM with tool binding"""
     messages = state.get("messages", [])
-    response = llm_with_tools.invoke(messages)
+    invocation_messages = [SystemMessage(content=system_prompt), *messages] if system_prompt else messages
+    response = llm_with_tools.invoke(invocation_messages)
     return {"messages": [response]}
 
 
@@ -184,10 +186,10 @@ def worker_route(state: WorkerState) -> Literal["agent", "__end__"]:
     return "agent"
 
 
-def build_worker_graph(tools: list, llm, llm_with_tools):
+def build_worker_graph(tools: list, llm, llm_with_tools, system_prompt: str | None = None):
     """Build a ReAct + Reflection Worker subgraph"""
     def agent_node_bound(state: WorkerState) -> dict:
-        return agent_node(state, llm_with_tools)
+        return agent_node(state, llm_with_tools, system_prompt)
 
     def worker_reflect_bound(state: WorkerState) -> dict:
         return worker_reflect(state, llm)

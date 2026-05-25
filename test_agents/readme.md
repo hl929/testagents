@@ -19,38 +19,30 @@ pip install -r requirements.txt
 ### 1. 安装 Claude CLI Skills
 
 ```bash
-cp -r test_agents/skills/code_analysis_skill ~/.claude/skills/
-cp -r test_agents/skills/case_review_skill ~/.claude/skills/
+cp -r .claude/skills/code_analysis_skill ~/.claude/skills/
+cp -r .claude/skills/case_review_skill ~/.claude/skills/
 ```
 
 ### 2. 运行测试分析
 
 ```bash
-python -m test_agents \
-  --module order \
-  --source a1b2c3d \
-  --target e4f5a6b \
-  --cases '[{"case_id":"TC001","title":"test order"}]'
+python -m test_agents "分析 order 模块从 a1b2c3d 到 e4f5a6b 的代码变更"
 ```
 
-### 3. 查看结果
+### 3. 查看 JSON 结果
 
 ```bash
-python -m test_agents \
-  --module order \
-  --source a1b2c3d \
-  --target e4f5a6b \
-  --cases '[{"case_id":"TC001","title":"test order"}]' \
-  --output markdown
+python -m test_agents "分析 order 模块从 a1b2c3d 到 e4f5a6b 的代码变更" --output json
 ```
 
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |
 |---|---|---|
-| `TEST_AGENTS_MODEL` | LLM 模型 | gpt-4o |
-| `TEST_AGENTS_CLAUDE_TIMEOUT` | Claude CLI 超时(秒) | 120 |
-| `TEST_AGENTS_MAX_DIFF_SIZE` | 最大 diff 大小 | 100000 |
+| `TEST_AGENTS_MODEL` | LLM 模型 | kimi-k2.6 |
+| `TEST_AGENTS_CLAUDE_TIMEOUT` | Claude CLI 超时(秒) | 1200 |
+| `TEST_AGENTS_MAX_PLAN_ITERATIONS` | 最大计划迭代次数 | 1 |
+| `TEST_AGENTS_MAX_CONFIRM_RETRIES` | 最大计划确认重试次数 | 1 |
 
 ## 测试
 

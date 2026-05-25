@@ -327,7 +327,7 @@ class TestReflectNode:
         with patch("test_agents.agents.supervisor.get_llm", return_value=mock_llm):
             result = reflect_node(state)
         assert result["needs_replan"] is True
-        assert result["plan_iterations"] == 1
+        assert "plan_iterations" not in result
 
 
 class TestSynthesizeNode:

@@ -251,7 +251,6 @@ def reflect_node(state: SupervisorState) -> dict:
         if assessment.get("assessment") == "REPLAN":
             return {
                 "needs_replan": True,
-                "plan_iterations": state.get("plan_iterations", 0) + 1,
                 "reflection_feedback": assessment.get("feedback", ""),
             }
         else:

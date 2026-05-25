@@ -114,13 +114,14 @@ def _run_direct_worker(user_request: str, agent_name: str) -> dict:
     worker_graph = WORKER_REGISTRY.get(agent_name)
     if worker_graph is None:
         raise RuntimeError(f"Worker graph for {agent_name} not found in registry")
+    output_key = "code_change_report" if agent_name == "code_analyzer" else "review_results"
     worker_input: WorkerState = {
         "task": user_request,
         "messages": [HumanMessage(content=user_request)],
         "error": "no",
         "reflection_count": 0,
         "max_reflections": 0,
-        "output_key": "result",
+        "output_key": output_key,
         "result": "",
     }
     # Eng Finding 1.3: callback must fire on simple-worker path too.
@@ -131,7 +132,6 @@ def _run_direct_worker(user_request: str, agent_name: str) -> dict:
             if hasattr(msg, "content") and msg.content and not getattr(msg, "tool_calls", None):
                 output_text = msg.content
                 break
-    output_key = "code_change_report" if agent_name == "code_analyzer" else "review_results"
     return {
         "user_request": user_request,
         "outputs": {output_key: output_text},

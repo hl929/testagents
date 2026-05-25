@@ -100,7 +100,7 @@ def build_graph():
 
 def _get_code_analyzer_tools():
     from test_agents.tools.base import ToolRegistry
-    return ToolRegistry.get_tools_by_names(["claude_cli"])
+    return ToolRegistry.get_tools_by_names(["claude_cli", "read_file", "list_dir", "grep", "glob"])
 
 
 def _get_case_reviewer_tools():

@@ -157,8 +157,52 @@ class TestCaseReviewerGraph:
         assert result["current_step_index"] == 1
 
 
-from test_agents.agents.worker_base import worker_reflect, _extract_last_agent_content
+from test_agents.agents.worker_base import aggregate_worker_result, worker_reflect, _extract_last_agent_content
 from langchain_core.messages import AIMessage
+
+
+class TestAggregateWorkerResult:
+    def test_multi_module_outputs_all_have_module_headers(self):
+        first_state: SupervisorState = {
+            "plan": {
+                "steps": [
+                    {
+                        "step_id": 1,
+                        "agent": "code_analyzer",
+                        "input_mapping": {"module_name": "order"},
+                    },
+                    {
+                        "step_id": 2,
+                        "agent": "code_analyzer",
+                        "input_mapping": {"module_name": "payment"},
+                    },
+                ],
+            },
+            "current_step_index": 0,
+            "outputs": {},
+        }
+        first = aggregate_worker_result(
+            first_state,
+            {"result": "订单报告"},
+            "code_change_report",
+            "code_analyzer",
+        )
+
+        second_state: SupervisorState = {
+            **first_state,
+            "current_step_index": 1,
+            "outputs": first["outputs"],
+        }
+        second = aggregate_worker_result(
+            second_state,
+            {"result": "支付报告"},
+            "code_change_report",
+            "code_analyzer",
+        )
+
+        assert second["outputs"]["code_change_report"] == (
+            "## 模块: order\n订单报告\n\n## 模块: payment\n支付报告"
+        )
 
 
 class TestWorkerReflect:
@@ -228,6 +272,24 @@ from langchain_core.tools import Tool
 
 
 class TestWorkerSubgraphInternal:
+    def test_agent_node_injects_system_prompt_without_mutating_state(self):
+        from test_agents.agents.worker_base import agent_node
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = AIMessage(content="done")
+        original_messages = [HumanMessage(content="do it")]
+        state = {"messages": original_messages}
+
+        result = agent_node(state, mock_llm, system_prompt="worker instructions")
+
+        invoked_messages = mock_llm.invoke.call_args.args[0]
+        assert isinstance(invoked_messages[0], SystemMessage)
+        assert invoked_messages[0].content == "worker instructions"
+        assert invoked_messages[1:] == original_messages
+        assert state["messages"] == original_messages
+        assert result == {"messages": [mock_llm.invoke.return_value]}
+
     def test_worker_graph_runs_agent_tools_reflect(self):
         """Test that the compiled worker graph can execute agent → tools → reflect."""
         # Create a real simple tool instead of MagicMock

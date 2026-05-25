@@ -5,6 +5,7 @@ import re
 
 from test_agents.agents.worker_base import build_worker_graph, aggregate_worker_result
 from test_agents.graph.state import SupervisorState
+from test_agents.prompts.loader import load_prompt
 from test_agents.tools.base import ToolRegistry
 
 
@@ -15,7 +16,12 @@ case_reviewer_graph = None
 def build_case_reviewer_graph(llm, llm_with_tools):
     """Build and cache the case reviewer subgraph"""
     global case_reviewer_graph
-    case_reviewer_graph = build_worker_graph(_case_reviewer_tools, llm, llm_with_tools)
+    case_reviewer_graph = build_worker_graph(
+        _case_reviewer_tools,
+        llm,
+        llm_with_tools,
+        system_prompt=load_prompt("case_reviewer"),
+    )
     return case_reviewer_graph
 
 
