@@ -34,6 +34,15 @@ class Config:
         os.path.join(os.path.dirname(__file__), "data", "reflection_experience.md"),
     )
 
+    # 数据库配置（data_analyst Worker）
+    DB_URL: str = os.getenv("TEST_AGENTS_DB_URL", "")
+    DB_QUERY_TIMEOUT: int = int(os.getenv("TEST_AGENTS_DB_QUERY_TIMEOUT", "30"))
+    DB_MAX_ROWS: int = int(os.getenv("TEST_AGENTS_DB_MAX_ROWS", "500"))
+    SCHEMA_DIR: str = os.getenv(
+        "TEST_AGENTS_SCHEMA_DIR",
+        os.path.join(os.path.dirname(__file__), "data", "schema"),
+    )
+
     # 可观测体系配置（spec §6）
     LOG_LEVEL: str = os.getenv("TEST_AGENTS_LOG_LEVEL", "INFO")
     LOG_DIR: str = os.getenv("TEST_AGENTS_LOG_DIR", "logs")
