@@ -106,12 +106,11 @@ START → agent[制定计划] → agent[调用 describe_schema] → tools → ag
 ### `data_analyst` Worker 绑定工具
 
 ```python
-["query_database", "describe_schema", "claude_cli"]
+["query_database", "describe_schema"]
 ```
 
 - `query_database`：执行 MySQL 只读查询
 - `describe_schema`：获取表结构描述（帮助 Agent 理解字段含义）
-- `claude_cli`：深度分析或复杂计算（备用）
 
 ### Supervisor 路由
 
