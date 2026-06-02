@@ -147,10 +147,17 @@ if agent == "data_analyst":
 6. 查询超时：30 秒
 
 **MySQL 连接：**
-- 驱动：`pymysql`
+- 驱动：`pymysql`（纯 Python，无需系统安装 `mysql-client`）
 - 连接串来源：环境变量 `TEST_AGENTS_DB_URL`
 - 格式：`mysql+pymysql://user:pass@host:port/db?connect_timeout=10`
 - 连接层只读：通过 `default_transaction_read_only=on` 或只读账号（建议）
+
+**为什么用 pymysql 而不是 mysql 命令行：**
+- 纯 Python 依赖，无需系统预装 `mysql-client`
+- 查询结果直接返回 Python 数据结构，转 Markdown 表格更简单
+- 错误信息结构化（`pymysql.Error`），便于 Agent 理解并修正 SQL
+- 超时控制更精细（`connect_timeout` + `read_timeout`）
+- 避免命令行传密码在进程列表中暴露的风险
 
 **输出格式：**
 - 成功：Markdown 表格（列头 + 数据行），最多 500 行
