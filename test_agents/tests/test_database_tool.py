@@ -16,22 +16,27 @@ class TestValidateSql:
     def test_insert_rejected(self):
         valid, msg = _validate_sql("INSERT INTO users VALUES (1)")
         assert not valid
-        assert "INSERT" in msg
+        assert "forbidden keyword" in msg.lower()
 
     def test_update_rejected(self):
         valid, msg = _validate_sql("UPDATE users SET name = 'x'")
         assert not valid
-        assert "UPDATE" in msg
+        assert "forbidden keyword" in msg.lower()
 
     def test_delete_rejected(self):
         valid, msg = _validate_sql("DELETE FROM users")
         assert not valid
-        assert "DELETE" in msg
+        assert "forbidden keyword" in msg.lower()
 
     def test_forbidden_keyword_detected(self):
         valid, msg = _validate_sql("DROP TABLE users")
         assert not valid
-        assert "DROP" in msg
+        assert "forbidden keyword" in msg.lower()
+
+    def test_word_boundary_does_not_false_positive(self):
+        assert _validate_sql("SELECT * FROM insertions") == (True, "")
+        assert _validate_sql("SELECT * FROM updates") == (True, "")
+        assert _validate_sql("SELECT * FROM raindrops") == (True, "")
 
     def test_semicolon_rejected(self):
         valid, msg = _validate_sql("SELECT * FROM users;")

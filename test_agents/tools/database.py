@@ -9,29 +9,19 @@ from test_agents.tools.base import TestAgentTool
 from test_agents.config import config
 
 
-FORBIDDEN_KEYWORDS = [
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "DROP",
-    "CREATE",
-    "ALTER",
-    "TRUNCATE",
-    "EXEC",
-    "CALL",
-    "INTO OUTFILE",
-    "LOAD_FILE",
-]
+_FORBIDDEN_KEYWORDS = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC|CALL|"
+    r"INTO\s+OUTFILE|LOAD_FILE)\b",
+    re.IGNORECASE,
+)
 
 
 def _validate_sql(query: str) -> tuple[bool, str]:
     """SQL 安全校验：仅允许 SELECT，禁止危险关键字和注释。"""
     stripped = query.strip()
-    upper = stripped.upper()
 
-    for keyword in FORBIDDEN_KEYWORDS:
-        if keyword in upper:
-            return False, f"Forbidden keyword detected: {keyword}"
+    if _FORBIDDEN_KEYWORDS.search(stripped):
+        return False, "SQL rejected: forbidden keyword detected"
 
     if not re.match(r"(?i)^SELECT\s", stripped):
         return False, "Only SELECT queries are allowed."
