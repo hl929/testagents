@@ -20,3 +20,10 @@ def test_synthesize_prompt_loads():
 def test_worker_reflect_prompt_loads():
     prompt = load_prompt("worker_reflect", task="分析代码", result="报告内容")
     assert "pass" in prompt or "retry" in prompt
+
+
+def test_data_analyst_prompt_loads():
+    prompt = load_prompt("data_analyst")
+    assert "测试数据分析师" in prompt
+    assert "query_database" in prompt
+    assert "describe_schema" in prompt
