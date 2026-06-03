@@ -33,6 +33,7 @@
 Worker 类型：
 - Code Analyzer（代码分析智能体） ：分析代码变更，绑定工具包括 ClaudeCliTool、ReadFileTool、ListDirTool、GrepTool、GlobTool
 - Case Reviewer（用例评审智能体） ：评审测试用例，绑定工具包括 ClaudeCliTool、TestCaseParserTool、BusinessKnowledgeTool
+- Data Analyst（数据分析智能体） ：分析测试数据趋势与洞察，绑定工具包括 QueryDatabaseTool、SchemaDescriptionTool
 子图内部结构：
 - Agent 节点 ：LLM 绑定工具，处理消息，决定调用工具或直接回答
 - Tools 节点 ：执行工具调用
@@ -48,6 +49,7 @@ Worker 类型：
 典型产出：
 - code_change_report ：代码变更报告
 - review_results ：测试用例评审结果
+- data_insight_report ：测试数据洞察报告
 - 支持动态扩展的其他产出字段
 
 ### 第四层：Tool 工具层
@@ -83,17 +85,18 @@ Worker 类型：
 │                                           END             END          │
 │       ↑                                    │                          │
 │       │     ┌─────────┴─────────┐         │                           │
-│       │     ▼                   ▼         │                           │
-│       │  ┌──────────────┐  ┌──────────────┐                          │
-│       │  │code_analyzer │  │case_reviewer │                          │
-│       │  │ (ReAct子图)   │  │ (ReAct子图)   │                          │
-│       │  └──────┬───────┘  └──────┬───────┘                          │
+│       │     ▼                   ▼                   ▼                 │
+│       │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │
+│       │  │code_analyzer │  │case_reviewer │  │data_analyst  │        │
+│       │  │ (ReAct子图)   │  │ (ReAct子图)   │  │ (ReAct子图)   │        │
+│       │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘        │
 │       │         │                 │                                   │
 │       │    ┌────┴────────────────┴────┐                              │
 │       │    │        outputs 汇聚        │                              │
 │       │    │  ┌────────────────────┐  │                              │
 │       │    │  │ code_change_report │  │                              │
 │       │    │  │ review_results     │  │                              │
+│       │    │  │ data_insight_report│  │                              │
 │       │    │  │ ... (动态扩展)      │  │                              │
 │       │    │  └────────────────────┘  │                              │
 │       │    └──────────────────────────┘                              │
@@ -107,8 +110,11 @@ Worker 类型：
 │       │                   └──→│ TestCasePar- │                         │
 │       │                      │ serTool      │                         │
 │       │                      │ BusinessKn-  │                         │
-│       │                      │ owledgeTool  │                         │
-│       │                      └──────────────┘                         │
+│       │                      │ owledgeTool  │  ┌──────────────┐        │
+│       │                      └──────────────┘  │ QueryDatabase│        │
+│       │                                        │SchemaDescrip-│        │
+│       │                                        │   tionTool   │        │
+│       │                                        └──────────────┘        │
 │       └────────────────────────────────────────────────────────────────│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -130,7 +136,8 @@ test_agents/
 │   ├── supervisor.py            # 监督者：planner + dispatch + reflect + synthesize + save_experience
 │   ├── worker_base.py           # Worker 子图构建工厂（ReAct + 反思）
 │   ├── code_analyzer.py         # 代码分析智能体
-│   └── case_reviewer.py         # 用例评审智能体
+│   ├── case_reviewer.py         # 用例评审智能体
+│   └── data_analyst.py          # 数据分析智能体
 ├── observability/               # 可观测性子包
 │   ├── context.py               # 上下文管理
 │   ├── logger.py                # 日志配置
@@ -143,6 +150,8 @@ test_agents/
 │   ├── claude_cli.py
 │   ├── test_case_parser.py
 │   ├── business_knowledge.py
+│   ├── database.py              # MySQL 只读查询工具
+│   ├── schema_loader.py         # 表结构描述加载工具
 │   └── fs/                      # 本地文件系统工具子包
 │       ├── read_file.py
 │       ├── list_dir.py
@@ -157,10 +166,16 @@ test_agents/
 │   ├── supervisor.md
 │   ├── worker_reflect.md
 │   ├── code_analyzer.md
-│   └── case_reviewer.md
+│   ├── case_reviewer.md
+│   └── data_analyst.md
 ├── config.py                    # 配置
 ├── main.py                      # 入口
 ├── data/                        # 运行时数据
+│   ├── schema/                  # 预编写表结构描述文件
+│   │   ├── test_execution.md
+│   │   ├── defects.md
+│   │   ├── coverage.md
+│   │   └── cicd.md
 │   └── reflection_experience.md # 经验记录文档
 └── logs/                        # 可观测性输出
     ├── app-YYYY-MM-DD.jsonl     # 主日志
@@ -237,8 +252,8 @@ test_agents/
 
 | 分类 | 含义 | 示例 |
 | --- | --- | --- |
-| relevant | 明确涉及代码分析或测试用例评审 | "分析 payment 模块代码变更" |
-| ambiguous | 提到相关关键词但不明确具体需求 | "帮我看看测试" |
+| relevant | 明确涉及代码分析、测试用例评审或数据分析 | "分析 payment 模块代码变更"、"分析过去30天缺陷趋势" |
+| ambiguous | 提到相关关键词但不明确具体需求 | "帮我看看测试"、"分析下数据" |
 | irrelevant | 完全无关 | "hello"、"今天天气怎样" |
 
 **降级策略：** 遇到异常时默认分类为 ambiguous，不中断流程
@@ -262,6 +277,7 @@ test_agents/
 | --- | --- | --- | --- |
 | code_analyzer | 分析代码变更 | module_name, source_commit, target_commit | code_change_report |
 | case_reviewer | 评审测试用例 | code_change_report, test_cases, business_knowledge | review_results |
+| data_analyst | 分析测试数据趋势 | module_name, time_range, metrics | data_insight_report |
 
 ### 4.4 ConfirmPlan 节点
 **职责：** 展示计划给用户确认
@@ -332,6 +348,7 @@ START → agent → (有工具调用?) → tools → agent (循环)
 **工具绑定：**
 - code_analyzer：ClaudeCliTool、ReadFileTool、ListDirTool、GrepTool、GlobTool
 - case_reviewer：ClaudeCliTool、TestCaseParserTool、BusinessKnowledgeTool
+- data_analyst：QueryDatabaseTool、SchemaDescriptionTool
 
 ## 5. 图编排
 
@@ -353,7 +370,7 @@ ConfirmPlan（等待用户确认）
 Dispatch
     ↓ 读取步骤 → 对应 Worker 子图
     ↓
-CodeAnalyzer / CaseReviewer（ReAct 子图）
+CodeAnalyzer / CaseReviewer / DataAnalyst（ReAct 子图）
     ├─ agent: LLM + 工具
     ├─ tools: 执行工具调用
     ├─ reflect: 评估结果质量
@@ -381,7 +398,7 @@ END → 输出 final_answer
 | ConfirmPlan | plan.confirmed == True | dispatch |
 | ConfirmPlan | 未确认且未超限 | planner |
 | ConfirmPlan | 未确认且超限 | END |
-| Dispatch | 还有步骤 | 对应 Worker |
+| Dispatch | 还有步骤 | 对应 Worker（code_analyzer / case_reviewer / data_analyst） |
 | Dispatch | 所有步骤完成 | reflect |
 | Reflect | needs_replan 且未超限 | planner |
 | Reflect | 其他 | synthesize |
@@ -389,7 +406,7 @@ END → 输出 final_answer
 ### 5.3 直接调用模式
 
 简单请求可绕过监督者，直接调用单个 Worker 子图。判断依据：
-- 关键词匹配（如"分析代码"→code_analyzer，"评审用例"→case_reviewer）
+- 关键词匹配（如"分析代码"→code_analyzer，"评审用例"→case_reviewer，"缺陷趋势"→data_analyst）
 - 结果直接写入统一的 outputs 结构
 
 ## 6. 工具层设计
@@ -423,6 +440,8 @@ TestAgentTool子类 ──→ ToolRegistry ──→ bind_tools / render_all()
 | claude_cli | 调用 Claude CLI 执行分析任务 | code_analyzer, case_reviewer |
 | parse_test_cases | 统一解析 JSON/Text 用例输入 | case_reviewer |
 | query_business_knowledge | 按模块名查询本地业务知识 | case_reviewer |
+| query_database | 执行 MySQL 只读查询，返回 Markdown 表格 | data_analyst |
+| describe_schema | 加载预编写的表结构描述文件 | data_analyst |
 | read_file | 读取文件并附带行号 | code_analyzer |
 | list_dir | 树形列出目录 | code_analyzer |
 | grep | 基于 ripgrep 的正则内容搜索 | code_analyzer |
@@ -514,7 +533,7 @@ Synthesize 遍历 outputs 生成 final_answer
 
 | 依赖类型 | 说明 |
 | --- | --- |
-| Python 依赖 | langgraph、langchain-core、langchain-openai、pydantic |
+| Python 依赖 | langgraph、langchain-core、langchain-openai、pydantic、pymysql |
 | CLI 工具 | Claude CLI（需单独安装配置） |
 | 系统依赖 | ripgrep（grep/glob 工具需要） |
 
@@ -534,6 +553,7 @@ Synthesize 遍历 outputs 生成 final_answer
 | 参数来源 | 用户直接提供 | Planner 提取 | Planner 提取 |
 | 结果汇聚 | 固定字段 | 固定字段 | 通用 outputs 字典 |
 | code_analyzer 工具 | 仅 claude_cli | 仅 claude_cli | claude_cli + 本地 fs 工具 |
+| data_analyst 工具 | 无 | 无 | query_database + describe_schema |
 | 可观测性 | 无 | 无 | 自建 logging + callback |
 
 ## 12. 反思与经验机制
