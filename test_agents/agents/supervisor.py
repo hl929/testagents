@@ -358,7 +358,7 @@ def route_from_confirm(state: SupervisorState) -> Literal["dispatch", "planner",
     return "planner"
 
 
-def route_from_dispatch(state: SupervisorState) -> Literal["code_analyzer", "case_reviewer", "reflect"]:
+def route_from_dispatch(state: SupervisorState) -> Literal["code_analyzer", "case_reviewer", "data_analyst", "reflect"]:
     """Route after dispatch: more steps→worker, all done→reflect"""
     plan = state.get("plan") or {}
     steps = plan.get("steps", []) if isinstance(plan, dict) else []
@@ -372,6 +372,8 @@ def route_from_dispatch(state: SupervisorState) -> Literal["code_analyzer", "cas
         return "code_analyzer"
     elif agent == "case_reviewer":
         return "case_reviewer"
+    elif agent == "data_analyst":
+        return "data_analyst"
     return "reflect"
 
 

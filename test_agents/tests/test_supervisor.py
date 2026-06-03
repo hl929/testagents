@@ -116,6 +116,13 @@ class TestRouteFromDispatch:
         }
         assert route_from_dispatch(state) == "case_reviewer"
 
+    def test_data_analyst_step(self):
+        state: SupervisorState = {
+            "plan": {"steps": [{"step_id": 1, "agent": "data_analyst"}]},
+            "current_step_index": 0,
+        }
+        assert route_from_dispatch(state) == "data_analyst"
+
 
 class TestRouteFromReflect:
     def test_needs_replan_under_limit_goes_planner(self):
