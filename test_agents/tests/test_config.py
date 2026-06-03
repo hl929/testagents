@@ -60,12 +60,30 @@ def test_observability_config_overrides(monkeypatch, reload_config):
     assert cfg.LOG_TRACE_HANDLES == 32
 
 
-def test_scheduler_config_defaults():
-    assert hasattr(config, "SCHEDULER_TASKS_FILE")
-    assert hasattr(config, "SCHEDULER_PID_FILE")
-    assert hasattr(config, "SCHEDULER_DEFAULT_OUTPUT")
-    assert hasattr(config, "SCHEDULER_DEFAULT_TIMEZONE")
-    assert config.SCHEDULER_DEFAULT_TIMEZONE == "Asia/Shanghai"
-    assert config.SCHEDULER_TASKS_FILE.endswith("scheduled_tasks.json")
-    assert config.SCHEDULER_PID_FILE.endswith("scheduler.pid")
-    assert config.SCHEDULER_DEFAULT_OUTPUT.endswith("scheduled_reports.md")
+def test_scheduler_config_defaults(monkeypatch, reload_config):
+    for k in (
+        "TEST_AGENTS_SCHEDULER_TASKS_FILE",
+        "TEST_AGENTS_SCHEDULER_PID_FILE",
+        "TEST_AGENTS_SCHEDULER_DEFAULT_OUTPUT",
+        "TEST_AGENTS_SCHEDULER_DEFAULT_TIMEZONE",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    importlib.reload(reload_config)
+    cfg = reload_config.config
+    assert cfg.SCHEDULER_DEFAULT_TIMEZONE == "Asia/Shanghai"
+    assert cfg.SCHEDULER_TASKS_FILE.endswith("scheduled_tasks.json")
+    assert cfg.SCHEDULER_PID_FILE.endswith("scheduler.pid")
+    assert cfg.SCHEDULER_DEFAULT_OUTPUT.endswith("scheduled_reports.md")
+
+
+def test_scheduler_config_overrides(monkeypatch, reload_config):
+    monkeypatch.setenv("TEST_AGENTS_SCHEDULER_TASKS_FILE", "/tmp/tasks.json")
+    monkeypatch.setenv("TEST_AGENTS_SCHEDULER_PID_FILE", "/tmp/scheduler.pid")
+    monkeypatch.setenv("TEST_AGENTS_SCHEDULER_DEFAULT_OUTPUT", "/tmp/reports.md")
+    monkeypatch.setenv("TEST_AGENTS_SCHEDULER_DEFAULT_TIMEZONE", "UTC")
+    importlib.reload(reload_config)
+    cfg = reload_config.config
+    assert cfg.SCHEDULER_TASKS_FILE == "/tmp/tasks.json"
+    assert cfg.SCHEDULER_PID_FILE == "/tmp/scheduler.pid"
+    assert cfg.SCHEDULER_DEFAULT_OUTPUT == "/tmp/reports.md"
+    assert cfg.SCHEDULER_DEFAULT_TIMEZONE == "UTC"

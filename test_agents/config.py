@@ -52,10 +52,19 @@ class Config:
     LOG_TRACE_HANDLES: int = int(os.getenv("TEST_AGENTS_LOG_TRACE_HANDLES", "64"))
 
     # Scheduler config
-    SCHEDULER_TASKS_FILE: str = os.path.join(os.path.dirname(__file__), "data", "scheduled_tasks.json")
-    SCHEDULER_PID_FILE: str = os.path.join(os.path.dirname(__file__), "data", "scheduler.pid")
-    SCHEDULER_DEFAULT_OUTPUT: str = os.path.join(os.path.dirname(__file__), "logs", "scheduled_reports.md")
-    SCHEDULER_DEFAULT_TIMEZONE: str = "Asia/Shanghai"
+    SCHEDULER_TASKS_FILE: str = os.getenv(
+        "TEST_AGENTS_SCHEDULER_TASKS_FILE",
+        os.path.join(os.path.dirname(__file__), "data", "scheduled_tasks.json"),
+    )
+    SCHEDULER_PID_FILE: str = os.getenv(
+        "TEST_AGENTS_SCHEDULER_PID_FILE",
+        os.path.join(os.path.dirname(__file__), "data", "scheduler.pid"),
+    )
+    SCHEDULER_DEFAULT_OUTPUT: str = os.getenv(
+        "TEST_AGENTS_SCHEDULER_DEFAULT_OUTPUT",
+        os.path.join(os.path.dirname(__file__), "logs", "scheduled_reports.md"),
+    )
+    SCHEDULER_DEFAULT_TIMEZONE: str = os.getenv("TEST_AGENTS_SCHEDULER_DEFAULT_TIMEZONE", "Asia/Shanghai")
 
 
 config = Config()
