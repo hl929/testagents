@@ -66,3 +66,6 @@ def test_scheduler_config_defaults():
     assert hasattr(config, "SCHEDULER_DEFAULT_OUTPUT")
     assert hasattr(config, "SCHEDULER_DEFAULT_TIMEZONE")
     assert config.SCHEDULER_DEFAULT_TIMEZONE == "Asia/Shanghai"
+    assert config.SCHEDULER_TASKS_FILE.endswith("scheduled_tasks.json")
+    assert config.SCHEDULER_PID_FILE.endswith("scheduler.pid")
+    assert config.SCHEDULER_DEFAULT_OUTPUT.endswith("scheduled_reports.md")
