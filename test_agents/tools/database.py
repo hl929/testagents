@@ -10,9 +10,18 @@ from test_agents.config import config
 
 _FORBIDDEN_KEYWORDS = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC|CALL|"
-    r"INTO\s+OUTFILE|LOAD_FILE)\b",
+    r"INTO\s+(?:OUTFILE|DUMPFILE)|LOAD_FILE)\b",
     re.IGNORECASE,
 )
+
+
+def _strip_string_literals(sql: str) -> str:
+    """将 SQL 字符串字面量替换为占位符，避免安全检测误报。"""
+    # 单引号字符串（简单处理，不处理转义）
+    sql = re.sub(r"'[^']*'", "''", sql)
+    # 双引号字符串
+    sql = re.sub(r'"[^"]*"', '""', sql)
+    return sql
 
 
 def _validate_sql(query: str) -> tuple[bool, str]:
@@ -25,28 +34,40 @@ def _validate_sql(query: str) -> tuple[bool, str]:
     if not re.match(r"(?i)^SELECT\s", stripped):
         return False, "Only SELECT queries are allowed."
 
-    if ";" in stripped:
+    # 检测注释和分号时忽略字符串字面量内容
+    stripped_literals = _strip_string_literals(stripped)
+
+    if ";" in stripped_literals:
         return False, "Semicolons are not allowed."
 
-    if "--" in stripped:
+    if "--" in stripped_literals:
         return False, "Line comments (-- ) are not allowed."
 
-    if "/*" in stripped or "*/" in stripped:
+    if "/*" in stripped_literals or "*/" in stripped_literals:
         return False, "Block comments (/* */) are not allowed."
 
     return True, ""
 
 
 def _add_limit(query: str, max_rows: int = 500) -> str:
-    """为缺少 LIMIT 的查询自动追加 LIMIT，或截断过大的 LIMIT。"""
-    # 查找已有的 LIMIT（不区分大小写）
-    limit_match = re.search(r"(?i)\bLIMIT\s+(\d+)\s*$", query.strip())
-    if limit_match:
-        current_limit = int(limit_match.group(1))
-        if current_limit > max_rows:
-            return re.sub(r"(?i)\bLIMIT\s+\d+\s*$", f"LIMIT {max_rows}", query.strip())
-        return query.strip()
-    return f"{query.strip()} LIMIT {max_rows}"
+    """为缺少 LIMIT 的查询自动追加 LIMIT，或截断末尾过大的 LIMIT。
+    如果 LIMIT 后面跟了 OFFSET 或其他子句，不修改。
+    """
+    stripped = query.strip()
+
+    # 先检查 LIMIT 是否在末尾（可截断场景）
+    limit_at_end = re.search(r"(?i)\bLIMIT\s+(\d+)\s*$", stripped)
+    if limit_at_end:
+        current = int(limit_at_end.group(1))
+        if current > max_rows:
+            return re.sub(r"(?i)\bLIMIT\s+\d+\s*$", f"LIMIT {max_rows}", stripped)
+        return stripped
+
+    # 如果查询中任何地方有 LIMIT，认为已有，不追加
+    if re.search(r"(?i)\bLIMIT\s+\d+\b", stripped):
+        return stripped
+
+    return f"{stripped} LIMIT {max_rows}"
 
 
 def _results_to_markdown(rows: list[tuple], description: list[tuple]) -> str:

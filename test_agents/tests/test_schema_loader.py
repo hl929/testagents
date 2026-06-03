@@ -71,3 +71,15 @@ class TestSchemaDescriptionTool:
         result = tool._run(table_name="defects")
 
         assert f"Schema 描述目录不存在: {schema_dir}" in result
+
+    def test_path_traversal_rejected(self, tmp_path, monkeypatch):
+        schema_dir = tmp_path / "schema"
+        schema_dir.mkdir()
+        (schema_dir / "defects.md").write_text("# defects", encoding="utf-8")
+
+        monkeypatch.setattr(config, "SCHEMA_DIR", str(schema_dir))
+
+        tool = SchemaDescriptionTool()
+        result = tool._run(table_name="../../../etc/passwd")
+
+        assert "Invalid table name" in result

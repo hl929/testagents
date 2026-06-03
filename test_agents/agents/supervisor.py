@@ -185,6 +185,8 @@ def _default_output_key(agent: str) -> str:
         return "code_change_report"
     elif agent == "case_reviewer":
         return "review_results"
+    elif agent == "data_analyst":
+        return "data_insight_report"
     return ""
 
 

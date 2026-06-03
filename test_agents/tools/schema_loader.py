@@ -1,6 +1,7 @@
 """Schema 描述加载工具"""
 
 import os
+import re
 
 from pydantic import BaseModel, Field
 
@@ -42,6 +43,10 @@ class SchemaDescriptionTool(TestAgentTool):
                 f"{overview_lines}\n\n"
                 "如需查看某张表的详细结构，请传入 table_name。"
             )
+
+        # 防止路径遍历：只允许字母、数字、下划线
+        if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
+            return f"Invalid table name: {table_name}. Only alphanumeric and underscore allowed."
 
         target_file = os.path.join(schema_dir, f"{table_name}.md")
         if os.path.exists(target_file):

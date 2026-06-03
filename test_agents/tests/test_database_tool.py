@@ -56,6 +56,20 @@ class TestValidateSql:
     def test_case_insensitive_select(self):
         assert _validate_sql("select * from users") == (True, "")
 
+    def test_into_dumpfile_rejected(self):
+        valid, msg = _validate_sql("SELECT 1 INTO DUMPFILE '/tmp/x'")
+        assert not valid
+        assert "forbidden keyword" in msg.lower()
+
+    def test_semicolon_in_string_literal_passes(self):
+        assert _validate_sql("SELECT 'a;b' FROM users") == (True, "")
+
+    def test_comment_in_string_literal_passes(self):
+        assert _validate_sql("SELECT 'hello -- world' FROM users") == (True, "")
+
+    def test_block_comment_in_string_literal_passes(self):
+        assert _validate_sql("SELECT '/*text*/' FROM users") == (True, "")
+
 
 class TestAddLimit:
     def test_adds_limit_when_missing(self):
@@ -69,6 +83,16 @@ class TestAddLimit:
 
     def test_truncates_case_insensitive(self):
         assert _add_limit("SELECT * FROM users limit 1000", 500) == "SELECT * FROM users LIMIT 500"
+
+    def test_no_duplicate_limit_with_offset(self):
+        """LIMIT ... OFFSET 不应被重复追加 LIMIT"""
+        result = _add_limit("SELECT * FROM users LIMIT 10 OFFSET 20", 500)
+        assert result == "SELECT * FROM users LIMIT 10 OFFSET 20"
+
+    def test_no_duplicate_limit_with_comma(self):
+        """LIMIT M,N 不应被重复追加 LIMIT"""
+        result = _add_limit("SELECT * FROM users LIMIT 10, 20", 500)
+        assert result == "SELECT * FROM users LIMIT 10, 20"
 
 
 class TestResultsToMarkdown:
