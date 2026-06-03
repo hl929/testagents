@@ -111,7 +111,7 @@ class TestQueryDatabaseTool:
     @patch("test_agents.tools.database.config")
     def test_sql_rejection_without_db_call(self, mock_config):
         tool = QueryDatabaseTool()
-        with patch("test_agents.tools.database.pymysql.connect") as mock_connect:
+        with patch("pymysql.connect") as mock_connect:
             result = tool._run("DROP TABLE users")
             assert "invalid" in result.lower() or "DROP" in result
             mock_connect.assert_not_called()
@@ -119,7 +119,7 @@ class TestQueryDatabaseTool:
     @patch("test_agents.tools.database.config")
     def test_empty_result_returns_message(self, mock_config):
         tool = QueryDatabaseTool()
-        with patch("test_agents.tools.database.pymysql.connect") as mock_connect:
+        with patch("pymysql.connect") as mock_connect:
             self._setup_mock_db(mock_config, mock_connect, rows=[], desc=[("id",), ("name",)])
             result = tool._run("SELECT id, name FROM users WHERE 1=0")
             assert "No data found" in result
@@ -128,7 +128,7 @@ class TestQueryDatabaseTool:
     @patch("test_agents.tools.database.config")
     def test_successful_query_returns_markdown(self, mock_config):
         tool = QueryDatabaseTool()
-        with patch("test_agents.tools.database.pymysql.connect") as mock_connect:
+        with patch("pymysql.connect") as mock_connect:
             self._setup_mock_db(
                 mock_config, mock_connect,
                 rows=[(1, "Alice"), (2, "Bob")],
@@ -142,7 +142,7 @@ class TestQueryDatabaseTool:
     @patch("test_agents.tools.database.config")
     def test_query_timeout_returns_error(self, mock_config):
         tool = QueryDatabaseTool()
-        with patch("test_agents.tools.database.pymysql.connect") as mock_connect:
+        with patch("pymysql.connect") as mock_connect:
             mock_config.DB_URL = "mysql+pymysql://user:pass@localhost:3306/testdb"
             import pymysql
             mock_connect.side_effect = pymysql.err.OperationalError(2013, "Lost connection")
@@ -152,7 +152,7 @@ class TestQueryDatabaseTool:
     @patch("test_agents.tools.database.config")
     def test_sql_execution_error_returns_message(self, mock_config):
         tool = QueryDatabaseTool()
-        with patch("test_agents.tools.database.pymysql.connect") as mock_connect:
+        with patch("pymysql.connect") as mock_connect:
             self._setup_mock_db(
                 mock_config, mock_connect,
                 rows=[],
@@ -165,7 +165,7 @@ class TestQueryDatabaseTool:
     @patch("test_agents.tools.database.config")
     def test_limit_auto_appended(self, mock_config):
         tool = QueryDatabaseTool()
-        with patch("test_agents.tools.database.pymysql.connect") as mock_connect:
+        with patch("pymysql.connect") as mock_connect:
             mock_cursor, _ = self._setup_mock_db(
                 mock_config, mock_connect,
                 rows=[(1,)],
@@ -179,7 +179,7 @@ class TestQueryDatabaseTool:
     @patch("test_agents.tools.database.config")
     def test_truncated_result_warning(self, mock_config):
         tool = QueryDatabaseTool()
-        with patch("test_agents.tools.database.pymysql.connect") as mock_connect:
+        with patch("pymysql.connect") as mock_connect:
             self._setup_mock_db(
                 mock_config, mock_connect,
                 rows=[(i,) for i in range(500)],

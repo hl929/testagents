@@ -2,7 +2,6 @@
 
 import re
 
-import pymysql
 from pydantic import BaseModel, Field
 
 from test_agents.tools.base import TestAgentTool
@@ -102,6 +101,8 @@ class QueryDatabaseTool(TestAgentTool):
 
         user, password, host, port_str, database = match.groups()
         port = int(port_str) if port_str else 3306
+
+        import pymysql
 
         conn = None
         try:
