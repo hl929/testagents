@@ -58,3 +58,11 @@ def test_observability_config_overrides(monkeypatch, reload_config):
     assert cfg.LOG_TRACES_KEEP == 500
     assert cfg.LOG_RETAIN_DAYS == 7
     assert cfg.LOG_TRACE_HANDLES == 32
+
+
+def test_scheduler_config_defaults():
+    assert hasattr(config, "SCHEDULER_TASKS_FILE")
+    assert hasattr(config, "SCHEDULER_PID_FILE")
+    assert hasattr(config, "SCHEDULER_DEFAULT_OUTPUT")
+    assert hasattr(config, "SCHEDULER_DEFAULT_TIMEZONE")
+    assert config.SCHEDULER_DEFAULT_TIMEZONE == "Asia/Shanghai"

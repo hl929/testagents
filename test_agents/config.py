@@ -51,5 +51,11 @@ class Config:
     LOG_RETAIN_DAYS: int = int(os.getenv("TEST_AGENTS_LOG_RETAIN_DAYS", "30"))
     LOG_TRACE_HANDLES: int = int(os.getenv("TEST_AGENTS_LOG_TRACE_HANDLES", "64"))
 
+    # Scheduler config
+    SCHEDULER_TASKS_FILE: str = os.path.join(os.path.dirname(__file__), "data", "scheduled_tasks.json")
+    SCHEDULER_PID_FILE: str = os.path.join(os.path.dirname(__file__), "data", "scheduler.pid")
+    SCHEDULER_DEFAULT_OUTPUT: str = os.path.join(os.path.dirname(__file__), "logs", "scheduled_reports.md")
+    SCHEDULER_DEFAULT_TIMEZONE: str = "Asia/Shanghai"
+
 
 config = Config()
