@@ -50,21 +50,15 @@ def _validate_sql(query: str) -> tuple[bool, str]:
 
 
 def _add_limit(query: str, max_rows: int = 500) -> str:
-    """为缺少 LIMIT 的查询自动追加 LIMIT，或截断末尾过大的 LIMIT。
-    如果 LIMIT 后面跟了 OFFSET 或其他子句，不修改。
-    """
+    """为缺少 LIMIT 的查询自动追加 LIMIT，或截断过大的 LIMIT（包括 LIMIT N OFFSET M 场景）。"""
     stripped = query.strip()
 
-    # 先检查 LIMIT 是否在末尾（可截断场景）
-    limit_at_end = re.search(r"(?i)\bLIMIT\s+(\d+)\s*$", stripped)
-    if limit_at_end:
-        current = int(limit_at_end.group(1))
+    # 查找 LIMIT 子句（不限制在末尾，支持 LIMIT N OFFSET M）
+    limit_match = re.search(r"(?i)\bLIMIT\s+(\d+)\b", stripped)
+    if limit_match:
+        current = int(limit_match.group(1))
         if current > max_rows:
-            return re.sub(r"(?i)\bLIMIT\s+\d+\s*$", f"LIMIT {max_rows}", stripped)
-        return stripped
-
-    # 如果查询中任何地方有 LIMIT，认为已有，不追加
-    if re.search(r"(?i)\bLIMIT\s+\d+\b", stripped):
+            return re.sub(r"(?i)\bLIMIT\s+\d+", f"LIMIT {max_rows}", stripped, count=1)
         return stripped
 
     return f"{stripped} LIMIT {max_rows}"
@@ -113,15 +107,17 @@ class QueryDatabaseTool(TestAgentTool):
             return "Database connection failed: TEST_AGENTS_DB_URL is not configured"
 
         # d. 解析 DB_URL
-        match = re.match(
-            r"^mysql\+pymysql://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/(.+)$",
-            config.DB_URL,
-        )
-        if not match:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(config.DB_URL)
+        if parsed.scheme not in ("mysql", "mysql+pymysql") or not parsed.hostname:
             return "Database connection failed: Invalid DB_URL format"
 
-        user, password, host, port_str, database = match.groups()
-        port = int(port_str) if port_str else 3306
+        user = parsed.username or ""
+        password = parsed.password or ""
+        host = parsed.hostname or ""
+        port = parsed.port or 3306
+        database = parsed.path.lstrip("/") if parsed.path else ""
 
         import pymysql
 

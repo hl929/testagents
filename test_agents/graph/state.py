@@ -62,6 +62,7 @@ class IntentExtraction(BaseModel):
     target_commit: str = Field(default="", description="目标 commit SHA")
     needs_code_analysis: bool = Field(default=False, description="是否需要代码变更分析")
     needs_case_review: bool = Field(default=False, description="是否需要测试用例评审")
+    needs_data_analysis: bool = Field(default=False, description="是否需要测试数据分析")
     test_cases_provided: bool = Field(default=False, description="用户是否提供了测试用例")
     missing_info: list[str] = Field(default_factory=list, description="缺少的关键信息")
 

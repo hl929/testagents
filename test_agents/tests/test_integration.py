@@ -62,6 +62,17 @@ def test_route_from_dispatch():
     }
     assert route_from_dispatch(state) == "case_reviewer"
 
+    # Test case: plan has data_analyst steps → data_analyst
+    state = {
+        "plan": {
+            "steps": [
+                {"agent": "data_analyst"}
+            ]
+        },
+        "current_step_index": 0
+    }
+    assert route_from_dispatch(state) == "data_analyst"
+
     # Test case: no plan steps left → reflect
     state = {
         "plan": {
@@ -423,3 +434,89 @@ def test_save_experience_dedup(tmp_path):
         content_before = exp_file.read_text()
         save_experience_node(state)
         assert exp_file.read_text() == content_before
+
+
+def test_direct_worker_invocation_data_analyst():
+    """Test direct worker invocation for data analyst simple request"""
+    mock_graph = MagicMock()
+    mock_graph.invoke.return_value = {
+        "result": "## 缺陷趋势分析\n过去30天共发现缺陷 42 个，严重缺陷占比 15%...",
+        "messages": [],
+        "error": "no",
+    }
+    with patch("test_agents.main.WORKER_REGISTRY", {"data_analyst": mock_graph}):
+        result = run_test_agents("分析过去30天支付模块的缺陷趋势")
+    assert result["outputs"]["data_insight_report"] == "## 缺陷趋势分析\n过去30天共发现缺陷 42 个，严重缺陷占比 15%..."
+    assert result["final_answer"] == "## 缺陷趋势分析\n过去30天共发现缺陷 42 个，严重缺陷占比 15%..."
+    assert result["step_results"][0]["agent"] == "data_analyst"
+    assert mock_graph.invoke.call_args.args[0]["output_key"] == "data_insight_report"
+
+
+def test_full_pipeline_data_analyst():
+    """Test the complete supervisor pipeline with data_analyst worker"""
+    mock_classifier_response = MagicMock()
+    mock_classifier_response.content = json.dumps({
+        "classification": "relevant",
+        "reason": "明确需求",
+        "extracted": {
+            "goal": "分析支付模块缺陷趋势",
+            "modules": ["payment"],
+            "source_commit": "",
+            "target_commit": "",
+            "needs_code_analysis": False,
+            "needs_case_review": False,
+            "needs_data_analysis": True,
+            "test_cases_provided": False,
+            "missing_info": [],
+        },
+    }, ensure_ascii=False)
+
+    plan_json = json.dumps({
+        "intent": "分析支付模块缺陷趋势",
+        "steps": [
+            {"agent": "data_analyst", "step_id": 1, "description": "查询过去30天支付模块的缺陷数据并分析趋势", "input_mapping": {"module_name": "payment", "time_range": "过去30天", "metrics": "缺陷数、严重缺陷占比"}, "output_key": "data_insight_report"}
+        ],
+        "confirmed": False,
+    }, ensure_ascii=False)
+    mock_planner_response = MagicMock()
+    mock_planner_response.content = plan_json
+
+    mock_reflect_response = MagicMock()
+    mock_reflect_response.content = '{"assessment": "COMPLETE", "feedback": ""}'
+
+    mock_synthesize_response = MagicMock()
+    mock_synthesize_response.content = "支付模块过去30天缺陷趋势分析完成"
+
+    mock_data_analyst_result = {
+        "outputs": {"data_insight_report": "## 缺陷趋势\n过去30天共42个缺陷..."},
+        "current_step_index": 1,
+        "step_results": [
+            {"step_id": 1, "agent": "data_analyst", "status": "success", "output_key": "data_insight_report"}
+        ]
+    }
+
+    with patch("test_agents.agents.supervisor.get_llm") as mock_supervisor_llm, \
+         patch("test_agents.graph.builder.get_llm") as mock_builder_llm, \
+         patch("test_agents.agents.supervisor.interrupt") as mock_interrupt, \
+         patch("test_agents.graph.builder.data_analyst_wrapper") as mock_data_analyst_wrapper:
+
+        mock_llm_instance = MagicMock()
+        mock_supervisor_llm.return_value = mock_llm_instance
+        mock_builder_llm.return_value = mock_llm_instance
+
+        mock_llm_instance.invoke.side_effect = [
+            mock_classifier_response,
+            mock_planner_response,
+            mock_reflect_response,
+            mock_synthesize_response,
+        ]
+
+        mock_interrupt.return_value = {"confirmed": True}
+        mock_data_analyst_wrapper.return_value = mock_data_analyst_result
+
+        result = run_test_agents("帮我分析一下过去30天支付模块的缺陷数据变化情况")
+
+        assert "outputs" in result
+        assert "data_insight_report" in result["outputs"]
+        assert result["outputs"]["data_insight_report"] == "## 缺陷趋势\n过去30天共42个缺陷..."
+        assert result.get("final_answer") == "支付模块过去30天缺陷趋势分析完成"

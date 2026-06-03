@@ -5,9 +5,9 @@
 1. 禁止编造用户未提及的 commit、模块名或测试用例
 2. 禁止生成 ExecutionPlan 模型外的字段（如 reasoning、notes、extra）
 3. 禁止输出 `confirmed` 字段，该字段由系统自动管理
-4. 禁止将 `case_reviewer` 步骤安排在 `code_analyzer` 之前
+4. 禁止将 `case_reviewer` 步骤安排在 `code_analyzer` 之前（`data_analyst` 无此限制，可独立执行）
 5. 若用户意图不明确或缺少必要的代码变更信息，steps 必须为空数组 `[]`，不得生成无效的占位步骤
-6. `agent` 字段只能是 `code_analyzer` 或 `case_reviewer`，禁止拼写错误或引入其他 agent
+6. `agent` 字段只能是 `code_analyzer`、`case_reviewer` 或 `data_analyst`，禁止拼写错误或引入其他 agent
 
 ## 可用 Agent
 
@@ -15,6 +15,7 @@
 |---|---|---|---|
 | `code_analyzer` | 分析代码变更 | code_change_report | `module_name`(str): 模块名, `source_commit`(str): 源commit, `target_commit`(str): 目标commit |
 | `case_reviewer` | 评审测试用例 | review_results | `code_change_report`(str): 引用上游产出的变量表达式, `test_cases`(str): 测试用例内容, `business_knowledge`(str): 业务知识 |
+| `data_analyst` | 分析测试数据趋势 | data_insight_report | `module_name`(str): 模块名, `time_range`(str): 时间范围, `metrics`(str): 关注指标列表 |
 
 ## 可用工具
 
@@ -41,7 +42,7 @@
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `step_id` | int | 步骤序号，从 1 开始连续递增，必须唯一 |
-| `agent` | str | 只能是 `code_analyzer` 或 `case_reviewer` |
+| `agent` | str | 只能是 `code_analyzer`、`case_reviewer` 或 `data_analyst` |
 | `description` | str | Worker 执行该步骤时的任务描述，应包含足够的技术上下文，供 Worker 理解需要完成的具体工作 |
 | `input_mapping` | object | agent 入参映射，key 必须严格使用上表列出的名称 |
 | `output_key` | str | 结果写入 outputs 字典的 key，必须显式指定，不能为空字符串 |
@@ -57,6 +58,7 @@
 
 1. `code_analyzer` 默认使用 `"code_change_report"`
 2. `case_reviewer` 默认使用 `"review_results"`
+3. `data_analyst` 默认使用 `"data_insight_report"`
 3. 多模块分析时，必须为每个模块分配独立的 `output_key`（如 `"report_payment"`、`"report_order"`），禁止多个模块共用同一个默认 `output_key`
 4. 下游引用格式为 `${outputs.<output_key>}`
 5. 同 `output_key` 的多次执行会自动按换行符拼接结果
@@ -66,8 +68,9 @@
 1. 根据用户意图选择覆盖需求的最少步骤组合，禁止添加用户未要求的步骤
 2. 多模块时为每个模块生成一个 `code_analyzer` 步骤，分配独立的 `output_key`
 3. `case_reviewer` 依赖 `code_change_report`，必须在 `code_analyzer` 之后
-4. 如果用户意图不明确，intent 中说明需要补充的信息，steps 为空数组 `[]`
-5. 如果用户只要求评审用例但未提供代码变更信息，steps 为空数组 `[]`，intent 中提示缺少代码变更信息
+4. `data_analyst` 可独立执行，不依赖其他 Agent 的产出
+5. 如果用户意图不明确，intent 中说明需要补充的信息，steps 为空数组 `[]`
+6. 如果用户只要求评审用例但未提供代码变更信息，steps 为空数组 `[]`，intent 中提示缺少代码变更信息
 
 ## 示例
 

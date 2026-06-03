@@ -23,6 +23,7 @@ setup_logging()
 _SINGLE_AGENT_KEYWORDS = {
     "code_analyzer": ["分析代码", "代码变更", "code change", "git diff", "代码分析"],
     "case_reviewer": ["评审用例", "测试用例评审", "case review", "用例评审", "评审测试用例"],
+    "data_analyst": ["缺陷趋势", "数据分析", "数据洞察", "database", "query", "数据查询", "测试数据"],
 }
 
 
@@ -114,7 +115,11 @@ def _run_direct_worker(user_request: str, agent_name: str) -> dict:
     worker_graph = WORKER_REGISTRY.get(agent_name)
     if worker_graph is None:
         raise RuntimeError(f"Worker graph for {agent_name} not found in registry")
-    output_key = "code_change_report" if agent_name == "code_analyzer" else "review_results"
+    output_key = {
+        "code_analyzer": "code_change_report",
+        "case_reviewer": "review_results",
+        "data_analyst": "data_insight_report",
+    }.get(agent_name, "result")
     worker_input: WorkerState = {
         "task": user_request,
         "messages": [HumanMessage(content=user_request)],

@@ -4,12 +4,13 @@
 
 - 分析代码变更（git diff）
 - 评审测试用例
+- 分析测试数据趋势与洞察（如缺陷趋势、代码覆盖率、CI/CD 流水线数据）
 
 ## 分类规则
 
-- `relevant`：明确提到代码分析、代码变更、git diff、测试用例评审
-- `ambiguous`：提到"测试""看看代码""帮我看看"等关键词，但不明确具体需求（缺少模块名、commit 范围或具体操作）
-- `irrelevant`：打招呼、闲聊、天气、数学计算、与代码/测试完全无关的内容
+- `relevant`：明确提到代码分析、代码变更、git diff、测试用例评审，或提到数据分析、缺陷趋势、覆盖率、测试指标等
+- `ambiguous`：提到"测试""看看代码""帮我看看""分析数据"等关键词，但不明确具体需求（缺少模块名、commit 范围、时间范围或具体操作）
+- `irrelevant`：打招呼、闲聊、天气、数学计算、与代码/测试/数据完全无关的内容
 
 ## 输出格式
 
@@ -25,6 +26,7 @@
   - `target_commit`: 目标 commit SHA（未提供则为空字符串）
   - `needs_code_analysis`: 是否需要代码变更分析（true/false）
   - `needs_case_review`: 是否需要测试用例评审（true/false）
+  - `needs_data_analysis`: 是否需要测试数据分析（true/false）
   - `test_cases_provided`: 用户是否提供了测试用例（true/false）
   - `missing_info`: 缺少的关键信息列表（如 `[]`）
 
@@ -51,6 +53,7 @@
     "target_commit": "def5678",
     "needs_code_analysis": true,
     "needs_case_review": false,
+    "needs_data_analysis": false,
     "test_cases_provided": false,
     "missing_info": []
   }
@@ -70,8 +73,29 @@
     "target_commit": "",
     "needs_code_analysis": true,
     "needs_case_review": true,
+    "needs_data_analysis": false,
     "test_cases_provided": false,
     "missing_info": ["commit 范围"]
+  }
+}
+```
+
+### 示例 2b：relevant（数据分析）
+用户需求："分析过去30天支付模块的缺陷趋势"
+```json
+{
+  "classification": "relevant",
+  "reason": "明确提到数据分析需求，包含模块名和时间范围",
+  "extracted": {
+    "goal": "分析支付模块缺陷趋势",
+    "modules": ["payment"],
+    "source_commit": "",
+    "target_commit": "",
+    "needs_code_analysis": false,
+    "needs_case_review": false,
+    "needs_data_analysis": true,
+    "test_cases_provided": false,
+    "missing_info": []
   }
 }
 ```

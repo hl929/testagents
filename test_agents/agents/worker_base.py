@@ -54,6 +54,10 @@ def build_worker_task(step: dict, state: SupervisorState) -> tuple[str, list]:
         context_parts.append(f"测试用例:\n{resolved['test_cases'][:2000]}")
     if resolved.get("business_knowledge"):
         context_parts.append(f"业务知识:\n{resolved['business_knowledge'][:1000]}")
+    if resolved.get("time_range"):
+        context_parts.append(f"时间范围: {resolved['time_range']}")
+    if resolved.get("metrics"):
+        context_parts.append(f"关注指标: {resolved['metrics']}")
     return task_desc, [HumanMessage(content="\n\n".join(context_parts))]
 
 

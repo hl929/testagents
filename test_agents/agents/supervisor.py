@@ -115,6 +115,8 @@ def _format_intent_analysis(analysis: dict) -> str:
         parts.append("- 需要：代码变更分析")
     if analysis.get("needs_case_review"):
         parts.append("- 需要：测试用例评审")
+    if analysis.get("needs_data_analysis"):
+        parts.append("- 需要：测试数据分析")
     if analysis.get("test_cases_provided"):
         parts.append("- 用户已提供测试用例")
     if analysis.get("missing_info"):
