@@ -59,6 +59,7 @@ Worker 类型：
 - 测试用例工具 ：TestCaseParserTool，统一解析 JSON/Text 用例输入
 - 业务知识工具 ：BusinessKnowledgeTool，按模块名查询本地业务知识
 - 文件系统工具 ：ReadFileTool（读取文件）、ListDirTool（列出目录）、GrepTool（内容搜索）、GlobTool（文件名匹配）
+- 数据库工具 ：QueryDatabaseTool（只读查询）、SchemaDescriptionTool（表结构描述）
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -127,6 +128,7 @@ Worker 类型：
 | --- | --- | --- |
 | 监督者→Worker | Worker 子图经包装后作为主图节点，dispatch 路由 | 复杂任务需要拆解时 |
 | 直接调用 Worker | 直接调用 worker_app.invoke() | 简单任务，用户明确指定某 Agent 时 |
+| 定时调度 Worker | 独立 scheduler 进程，cron 触发后调用 run_test_agents() | 周期性执行场景（日报、趋势监控） |
 
 ### 2.2 目录结构
 
@@ -145,6 +147,12 @@ test_agents/
 │   ├── handlers.py              # 日志处理器
 │   ├── callback.py              # LangGraph 回调
 │   └── metrics.py               # 指标收集
+├── scheduler/                   # 定时调度子包
+│   ├── models.py                # ScheduledTask 数据模型
+│   ├── store.py                 # JSON 任务仓库读写
+│   ├── engine.py                # APScheduler 封装
+│   ├── executor.py              # 任务执行回调
+│   └── cli.py                   # add/remove/list/start/stop CLI
 ├── tools/                       # 公共工具层
 │   ├── base.py                  # 工具基类 + 自动注册表
 │   ├── claude_cli.py
@@ -176,10 +184,13 @@ test_agents/
 │   │   ├── defects.md
 │   │   ├── coverage.md
 │   │   └── cicd.md
+│   ├── scheduled_tasks.json     # 定时任务仓库
+│   ├── scheduler.pid            # 调度器进程 PID 文件
 │   └── reflection_experience.md # 经验记录文档
 └── logs/                        # 可观测性输出
     ├── app-YYYY-MM-DD.jsonl     # 主日志
     ├── metrics.jsonl            # 指标汇总
+    ├── scheduled_reports.md     # 定时任务执行报告
     └── traces/<trace_id>.jsonl  # 每个 trace 单独文件
 ```
 
@@ -533,7 +544,7 @@ Synthesize 遍历 outputs 生成 final_answer
 
 | 依赖类型 | 说明 |
 | --- | --- |
-| Python 依赖 | langgraph、langchain-core、langchain-openai、pydantic、pymysql |
+| Python 依赖 | langgraph、langchain-core、langchain-openai、pydantic、pymysql、apscheduler |
 | CLI 工具 | Claude CLI（需单独安装配置） |
 | 系统依赖 | ripgrep（grep/glob 工具需要） |
 
@@ -554,6 +565,7 @@ Synthesize 遍历 outputs 生成 final_answer
 | 结果汇聚 | 固定字段 | 固定字段 | 通用 outputs 字典 |
 | code_analyzer 工具 | 仅 claude_cli | 仅 claude_cli | claude_cli + 本地 fs 工具 |
 | data_analyst 工具 | 无 | 无 | query_database + describe_schema |
+| 定时调度 | 无 | 无 | 独立 scheduler 子包 + APScheduler |
 | 可观测性 | 无 | 无 | 自建 logging + callback |
 
 ## 12. 反思与经验机制
@@ -663,3 +675,186 @@ logs/
 - 不做集中式日志收集
 - 不做告警 / 通知机制
 - 不支持多线程并发执行
+
+## 14. 定时调度（Scheduler）
+
+### 14.1 设计目标
+
+为 test_agents 增加定时调度能力，允许用户配置 cron 表达式和 prompt，到指定时间自动执行对应的 Agent 任务，并将结果追加写入报告文件。任务配置持久化存储，重启后自动恢复。
+
+### 14.2 设计原则
+
+- **与现有架构解耦**：scheduler 作为独立模块运行，不侵入 main.py / graph / agents 的现有代码
+- **复用现有入口**：定时任务的执行复用 `run_test_agents()`，体验完全一致
+- **进程隔离**：调度器可独立长期驻留，不影响交互式 CLI 的短期执行模式
+- **持久化**：任务仓库使用本地 JSON 文件，零外部基础设施依赖
+
+### 14.3 架构分层
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    test_agents.scheduler                     │
+│  (长期驻留进程: python -m test_agents.scheduler start)      │
+├─────────────────────────────────────────────────────────────┤
+│  CLI 层 (argparse)                                          │
+│    ├─ add    : 添加定时任务                                 │
+│    ├─ remove : 删除定时任务                                 │
+│    ├─ list   : 列出所有任务                                 │
+│    ├─ start  : 启动调度器进程                               │
+│    └─ stop   : 停止调度器进程                               │
+├─────────────────────────────────────────────────────────────┤
+│  调度引擎 (APScheduler)                                     │
+│    ├─ CronTrigger : 解析 cron 表达式                        │
+│    └─ JobStore    : 内存 + 自定义 JSON 持久化               │
+├─────────────────────────────────────────────────────────────┤
+│  执行层                                                      │
+│    └─ 调用 run_test_agents(prompt) → 结果写入报告文件      │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    logs/scheduled_reports.md   (追加写入)
+                    data/scheduled_tasks.json   (任务仓库)
+```
+
+### 14.4 数据模型
+
+**ScheduledTask 字段：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | str | UUID，唯一标识 |
+| name | str | 用户可读的任务名称 |
+| cron | str | cron 表达式（如 `0 9 * * 1-5`） |
+| prompt | str | 执行时传给 `run_test_agents()` 的 prompt |
+| agent_hint | str | 可选，直接指定 worker（code_analyzer / case_reviewer / data_analyst），为空则走 Supervisor 自动路由 |
+| output_file | str | 结果追加写入的文件路径，默认 `logs/scheduled_reports.md` |
+| timezone | str | 时区，默认 `Asia/Shanghai` |
+| enabled | bool | 是否启用 |
+| created_at | str | ISO 时间 |
+| last_run_at | str \| None | 最近一次执行时间 |
+| last_run_status | str \| None | 最近一次执行状态：success / error |
+| run_count | int | 累计执行次数 |
+
+**任务仓库格式（`data/scheduled_tasks.json`）：**
+
+```json
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "uuid",
+      "name": "每日代码分析",
+      "cron": "0 9 * * 1-5",
+      "prompt": "分析昨天提交的代码变更",
+      "agent_hint": "code_analyzer",
+      "output_file": "logs/scheduled_reports.md",
+      "timezone": "Asia/Shanghai",
+      "enabled": true,
+      "created_at": "2026-06-03T10:00:00+08:00",
+      "last_run_at": null,
+      "last_run_status": null,
+      "run_count": 0
+    }
+  ]
+}
+```
+
+### 14.5 模块职责
+
+| 模块 | 职责 |
+| --- | --- |
+| `scheduler/models.py` | 定义 ScheduledTask Pydantic 模型，含 cron 合法性校验 |
+| `scheduler/store.py` | JSON 任务仓库的 load / save / add / remove / get，使用文件锁保证并发安全 |
+| `scheduler/engine.py` | APScheduler 封装：load_jobs、add_job、remove_job、start、shutdown，触发回调到 executor |
+| `scheduler/executor.py` | 任务触发回调：调用 `run_test_agents(prompt)`，格式化报告，追加写入 output_file，更新任务状态并持久化 |
+| `scheduler/cli.py` | argparse CLI：add / remove / list / start / stop |
+
+### 14.6 CLI 使用
+
+```bash
+# 添加任务
+python -m test_agents.scheduler add \
+  --name "每日代码分析" \
+  --cron "0 9 * * 1-5" \
+  --prompt "分析昨天提交的代码变更" \
+  --agent code_analyzer \
+  --output logs/daily_code_report.md \
+  --timezone Asia/Shanghai
+
+# 查询/删除
+python -m test_agents.scheduler list
+python -m test_agents.scheduler remove --id <uuid>
+
+# 启停调度器进程
+python -m test_agents.scheduler start
+python -m test_agents.scheduler stop
+```
+
+`stop` 实现：start 时写入 PID 到 `data/scheduler.pid`，stop 时读取 PID 发送 SIGTERM。
+
+### 14.7 执行流程
+
+```
+APScheduler 触发
+    │
+    ▼
+executor.execute_task()  ──▶  记录 start_time
+    │
+    ▼
+run_test_agents(task.prompt)  (复用现有入口)
+    │
+    ▼
+捕获结果 + 异常
+    │
+    ▼
+格式化报告（时间、任务名、cron、状态、结果摘要）
+    │
+    ▼
+追加写入 task.output_file
+    │
+    ▼
+更新 last_run_at / last_run_status / run_count
+原子写回 data/scheduled_tasks.json
+```
+
+**报告文件格式示例：**
+
+```markdown
+## [2026-06-03 09:00:00] 每日代码分析
+
+- **任务 ID**: uuid
+- **Cron**: `0 9 * * 1-5`
+- **状态**: success
+- **Prompt**: 分析昨天提交的代码变更
+
+### 执行结果
+
+<result content here>
+
+---
+```
+
+### 14.8 错误处理
+
+| 场景 | 处理方式 |
+| --- | --- |
+| 任务执行失败 | 记录错误到报告文件，更新 `last_run_status="error"`，不影响其他任务调度 |
+| 调度器进程崩溃 | 重启后从 `data/scheduled_tasks.json` 重新加载所有 enabled 任务 |
+| 并发修改任务仓库 | JSON 读写使用文件锁（Linux 用 fcntl，Windows 用 msvcrt） |
+| cron 表达式非法 | `add` 时校验，非法则拒绝并提示 |
+| 输出文件目录不存在 | 自动创建父目录 |
+
+### 14.9 配置
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `TEST_AGENTS_SCHEDULER_TASKS_FILE` | 任务仓库路径 | `data/scheduled_tasks.json` |
+| `TEST_AGENTS_SCHEDULER_PID_FILE` | PID 文件路径 | `data/scheduler.pid` |
+| `TEST_AGENTS_SCHEDULER_DEFAULT_OUTPUT` | 默认报告文件 | `logs/scheduled_reports.md` |
+
+### 14.10 测试策略
+
+- **单元测试**：`test_scheduler_store.py` — store 的增删改查、并发安全（文件锁）
+- **单元测试**：`test_scheduler_engine.py` — engine 的 load/start/stop，mock APScheduler
+- **集成测试**：`test_scheduler_e2e.py` — 启动 scheduler，用短间隔 trigger 验证执行和文件输出
+- 所有测试不依赖真实 LLM，mock `run_test_agents()` 返回值
