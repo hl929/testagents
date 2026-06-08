@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+import time
 
 from test_agents.config import config
 from test_agents.scheduler.engine import SchedulerEngine
@@ -80,8 +81,8 @@ def main(args=None):
         print("调度器已启动，按 Ctrl+C 停止...")
         try:
             engine.start()
-            import signal
-            signal.pause()
+            while True:
+                time.sleep(1)
         except KeyboardInterrupt:
             print("\n正在停止...")
         finally:
