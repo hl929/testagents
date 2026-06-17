@@ -8,3 +8,4 @@ from test_agents.tools.fs.grep import GrepTool
 from test_agents.tools.fs.glob import GlobTool
 from test_agents.tools.database import QueryDatabaseTool
 from test_agents.tools.schema_loader import SchemaDescriptionTool
+from test_agents.tools.save_report import SaveReportTool

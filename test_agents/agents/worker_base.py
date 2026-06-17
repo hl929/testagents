@@ -58,6 +58,12 @@ def build_worker_task(step: dict, state: SupervisorState) -> tuple[str, list]:
         context_parts.append(f"时间范围: {resolved['time_range']}")
     if resolved.get("metrics"):
         context_parts.append(f"关注指标: {resolved['metrics']}")
+    if resolved.get("file_path"):
+        context_parts.append(f"测试数据文件: {resolved['file_path']}")
+    if resolved.get("business_line"):
+        context_parts.append(f"业务线: {resolved['business_line']}")
+    if resolved.get("template_name"):
+        context_parts.append(f"报告模板: {resolved['template_name']}")
     return task_desc, [HumanMessage(content="\n\n".join(context_parts))]
 
 

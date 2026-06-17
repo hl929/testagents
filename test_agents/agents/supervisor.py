@@ -117,6 +117,8 @@ def _format_intent_analysis(analysis: dict) -> str:
         parts.append("- 需要：测试用例评审")
     if analysis.get("needs_data_analysis"):
         parts.append("- 需要：测试数据分析")
+    if analysis.get("needs_test_report"):
+        parts.append("- 需要：生成测试报告")
     if analysis.get("test_cases_provided"):
         parts.append("- 用户已提供测试用例")
     if analysis.get("missing_info"):
@@ -189,6 +191,8 @@ def _default_output_key(agent: str) -> str:
         return "review_results"
     elif agent == "data_analyst":
         return "data_insight_report"
+    elif agent == "test_report_generator":
+        return "test_report"
     return ""
 
 
@@ -378,6 +382,8 @@ def route_from_dispatch(state: SupervisorState) -> Literal["code_analyzer", "cas
         return "case_reviewer"
     elif agent == "data_analyst":
         return "data_analyst"
+    elif agent == "test_report_generator":
+        return "test_report_generator"
     return "reflect"
 
 

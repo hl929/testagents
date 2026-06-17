@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class PlanStep(BaseModel):
     step_id: int = Field(description="步骤序号，从 1 开始")
-    agent: str = Field(description="执行 agent: code_analyzer / case_reviewer")
+    agent: str = Field(description="执行 agent: code_analyzer / case_reviewer / data_analyst / test_report_generator")
     description: str = Field(description="步骤描述")
     input_mapping: dict[str, str] = Field(default_factory=dict, description="agent入参 → state字段引用或常量")
     output_key: str = Field(default="", description="结果写入 outputs 的 key，空则按 agent 类型默认")
@@ -63,6 +63,7 @@ class IntentExtraction(BaseModel):
     needs_code_analysis: bool = Field(default=False, description="是否需要代码变更分析")
     needs_case_review: bool = Field(default=False, description="是否需要测试用例评审")
     needs_data_analysis: bool = Field(default=False, description="是否需要测试数据分析")
+    needs_test_report: bool = Field(default=False, description="是否需要生成测试报告")
     test_cases_provided: bool = Field(default=False, description="用户是否提供了测试用例")
     missing_info: list[str] = Field(default_factory=list, description="缺少的关键信息")
 

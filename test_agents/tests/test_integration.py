@@ -73,6 +73,17 @@ def test_route_from_dispatch():
     }
     assert route_from_dispatch(state) == "data_analyst"
 
+    # Test case: plan has test_report_generator steps → test_report_generator
+    state = {
+        "plan": {
+            "steps": [
+                {"agent": "test_report_generator"}
+            ]
+        },
+        "current_step_index": 0
+    }
+    assert route_from_dispatch(state) == "test_report_generator"
+
     # Test case: no plan steps left → reflect
     state = {
         "plan": {

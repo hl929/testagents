@@ -30,6 +30,10 @@ from test_agents.agents.data_analyst import (
     build_data_analyst_graph,
     data_analyst_wrapper,
 )
+from test_agents.agents.test_report_generator import (
+    build_test_report_generator_graph,
+    report_generator_wrapper,
+)
 from test_agents.agents.worker_base import WORKER_REGISTRY
 from test_agents.graph.state import SupervisorState
 
@@ -41,17 +45,21 @@ def build_graph():
     code_analyzer_tools = _get_code_analyzer_tools()
     case_reviewer_tools = _get_case_reviewer_tools()
     data_analyst_tools = _get_data_analyst_tools()
+    test_report_generator_tools = _get_test_report_generator_tools()
 
     llm_with_ca_tools = llm.bind_tools(code_analyzer_tools)
     llm_with_cr_tools = llm.bind_tools(case_reviewer_tools)
     llm_with_da_tools = llm.bind_tools(data_analyst_tools)
+    llm_with_tr_tools = llm.bind_tools(test_report_generator_tools)
 
     code_analyzer_graph = build_code_analyzer_graph(llm, llm_with_ca_tools)
     case_reviewer_graph = build_case_reviewer_graph(llm, llm_with_cr_tools)
     data_analyst_graph = build_data_analyst_graph(llm, llm_with_da_tools)
+    test_report_generator_graph = build_test_report_generator_graph(llm, llm_with_tr_tools)
     WORKER_REGISTRY["code_analyzer"] = code_analyzer_graph
     WORKER_REGISTRY["case_reviewer"] = case_reviewer_graph
     WORKER_REGISTRY["data_analyst"] = data_analyst_graph
+    WORKER_REGISTRY["test_report_generator"] = test_report_generator_graph
 
     graph = StateGraph(SupervisorState)
 
@@ -62,6 +70,7 @@ def build_graph():
     graph.add_node("code_analyzer", code_analyzer_wrapper)
     graph.add_node("case_reviewer", case_reviewer_wrapper)
     graph.add_node("data_analyst", data_analyst_wrapper)
+    graph.add_node("test_report_generator", report_generator_wrapper)
     graph.add_node("reflect", reflect_node)
     graph.add_node("synthesize", synthesize_node)
     graph.add_node("save_experience", save_experience_node)
@@ -74,6 +83,7 @@ def build_graph():
     graph.add_edge("code_analyzer", "dispatch")
     graph.add_edge("case_reviewer", "dispatch")
     graph.add_edge("data_analyst", "dispatch")
+    graph.add_edge("test_report_generator", "dispatch")
     graph.add_edge("synthesize", "save_experience")
     graph.add_edge("save_experience", END)
 
@@ -95,7 +105,7 @@ def build_graph():
     graph.add_conditional_edges(
         "dispatch",
         route_from_dispatch,
-        {"code_analyzer": "code_analyzer", "case_reviewer": "case_reviewer", "data_analyst": "data_analyst", "reflect": "reflect"},
+        {"code_analyzer": "code_analyzer", "case_reviewer": "case_reviewer", "data_analyst": "data_analyst", "test_report_generator": "test_report_generator", "reflect": "reflect"},
     )
 
     graph.add_conditional_edges(
@@ -121,3 +131,8 @@ def _get_case_reviewer_tools():
 def _get_data_analyst_tools():
     from test_agents.tools.base import ToolRegistry
     return ToolRegistry.get_tools_by_names(["query_database", "describe_schema"])
+
+
+def _get_test_report_generator_tools():
+    from test_agents.tools.base import ToolRegistry
+    return ToolRegistry.get_tools_by_names(["claude_cli", "save_report"])

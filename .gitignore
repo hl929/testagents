@@ -13,3 +13,6 @@ logs/
 
 # Reflection experience is runtime data written by save_experience_node, not source
 test_agents/data/reflection_experience.md
+
+# Generated test reports (runtime artifacts, not source)
+reports/
